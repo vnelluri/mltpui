@@ -15,7 +15,9 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import logging
 import random
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
@@ -27,6 +29,8 @@ from sqlparse.tokens import DML, Keyword
 
 from app.config import settings
 from app.db.client import make_boto3_client
+
+logger = logging.getLogger("ml_platform.snowflake")
 
 # ── SQL safety ───────────────────────────────────────────────────────────────
 _FORBIDDEN_KEYWORDS = {
@@ -52,6 +56,23 @@ _FORBIDDEN_KEYWORDS = {
 
 class SqlValidationError(ValueError):
     """Raised when a submitted query is not a safe read-only SELECT."""
+
+
+# Snowflake unquoted-identifier characters only. Database/schema/table names
+# arriving as path parameters are interpolated into catalog SQL (SHOW ...,
+# SELECT * FROM "db"."schema"."table"), which bypasses validate_select_only —
+# so they must never be able to carry SQL syntax.
+_IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_$]+$")
+
+
+def validate_identifier(name: str, kind: str = "identifier") -> str:
+    """Validate a Snowflake object name used in interpolated catalog SQL."""
+    if not name or not _IDENTIFIER_RE.match(name):
+        raise SqlValidationError(
+            f"Invalid Snowflake {kind}: only letters, digits, '_' and '$' "
+            "are allowed."
+        )
+    return name
 
 
 def validate_select_only(sql: str) -> str:
@@ -97,13 +118,22 @@ def wrap_with_limit(sql: str, limit: int) -> str:
 
 
 # ── KMS encryption ──────────────────────────────────────────────────────────
+class KmsEncryptionError(RuntimeError):
+    """Raised when token encryption/decryption cannot be performed safely.
+
+    Mapped to a 503 by the app-level exception handler — the request fails
+    rather than ever storing a token without real encryption."""
+
+
 class KmsCipher:
     """Encrypt/decrypt Snowflake tokens with AWS KMS (or LocalStack KMS).
 
-    Falls back to a reversible local encoding only if KMS is entirely
-    unavailable, so local dev never hard-fails; the marker prefix records
-    which path was used. In production with a real KMS key this always uses
-    KMS.
+    Fail-closed by design: whenever a real KMS key is configured or the app
+    runs with prod auth, any KMS failure raises :class:`KmsEncryptionError` —
+    a token is never silently stored base64-encoded. The reversible local
+    encoding exists ONLY for dev-auth environments with no real key (e.g.
+    LocalStack briefly unavailable), and its marker prefix records that the
+    weak path was used.
     """
 
     _LOCAL_PREFIX = "local:"
@@ -112,6 +142,10 @@ class KmsCipher:
     def __init__(self, tenant_id: Optional[str] = None) -> None:
         self.tenant_id = tenant_id
         self._client = make_boto3_client("kms", settings.KMS_ENDPOINT_URL)
+
+    @property
+    def _fail_closed(self) -> bool:
+        return bool(settings.KMS_SNOWFLAKE_KEY_ARN) or not settings.is_dev_auth
 
     def _key_id(self) -> str:
         if settings.KMS_SNOWFLAKE_KEY_ARN:
@@ -129,13 +163,27 @@ class KmsCipher:
             )
             blob = resp["CiphertextBlob"]
             return self._KMS_PREFIX + base64.b64encode(blob).decode("ascii")
-        except Exception:
-            # Local fallback (never used with a real, configured KMS key).
+        except Exception as exc:
+            if self._fail_closed:
+                logger.error("KMS encrypt failed (key %s): %s", self._key_id(), exc)
+                raise KmsEncryptionError(
+                    "Token encryption via KMS failed; refusing to store the "
+                    "token without real encryption."
+                ) from exc
+            # Dev-only fallback (dev auth AND no real key configured).
+            logger.warning("KMS unavailable in dev — using reversible local encoding.")
             encoded = base64.b64encode(plaintext.encode("utf-8")).decode("ascii")
             return self._LOCAL_PREFIX + encoded
 
     def decrypt(self, ciphertext: str) -> str:
         if ciphertext.startswith(self._LOCAL_PREFIX):
+            if self._fail_closed:
+                # A locally-encoded token must never be honoured in prod —
+                # it means the value was written without KMS.
+                raise KmsEncryptionError(
+                    "Refusing to use a token that was stored without KMS "
+                    "encryption. Reconnect to Snowflake to re-issue it."
+                )
             raw = ciphertext[len(self._LOCAL_PREFIX):]
             return base64.b64decode(raw).decode("utf-8")
         if ciphertext.startswith(self._KMS_PREFIX):
@@ -143,7 +191,13 @@ class KmsCipher:
         else:
             raw = ciphertext
         blob = base64.b64decode(raw)
-        resp = self._client.decrypt(CiphertextBlob=blob)
+        try:
+            resp = self._client.decrypt(CiphertextBlob=blob)
+        except Exception as exc:
+            logger.error("KMS decrypt failed: %s", exc)
+            raise KmsEncryptionError(
+                "Token decryption via KMS failed; try again shortly."
+            ) from exc
         return resp["Plaintext"].decode("utf-8")
 
 
@@ -290,6 +344,7 @@ class SnowflakeService:
         return self._run_scalar_query(token, "SHOW DATABASES", column="name")
 
     def list_schemas(self, token: str, database: str) -> List[str]:
+        validate_identifier(database, "database")
         if self.mock:
             return list(MOCK_SCHEMAS)
         return self._run_scalar_query(
@@ -298,6 +353,8 @@ class SnowflakeService:
 
     def list_tables(self, token: str, database: str, schema: str) -> List[Dict[str, Any]]:
         """Return tables with column metadata (mock) or names (real)."""
+        validate_identifier(database, "database")
+        validate_identifier(schema, "schema")
         if self.mock:
             return [
                 {
@@ -314,6 +371,9 @@ class SnowflakeService:
     def get_table_preview(
         self, token: str, database: str, schema: str, table: str, rows: int = 10
     ) -> QueryResult:
+        validate_identifier(database, "database")
+        validate_identifier(schema, "schema")
+        validate_identifier(table, "table")
         if self.mock:
             table_schema = MOCK_TABLE_SCHEMAS.get(
                 table.upper(),

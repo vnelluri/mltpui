@@ -73,7 +73,7 @@ export function ModelsPage() {
 
   const changeStage = async (model: ModelVersion, stage: ModelStage) => {
     try {
-      await modelsApi.setStage(model.name, model.version, stage);
+      await modelsApi.setStage(model.name, model.version, stage, model.tenantId);
       await load();
     } catch (err) {
       setError(extractErrorMessage(err));
@@ -85,7 +85,7 @@ export function ModelsPage() {
     setCard(null);
     setCardLoading(true);
     try {
-      const c = await modelsApi.getCard(model.name, model.version);
+      const c = await modelsApi.getCard(model.name, model.version, model.tenantId);
       setCard(c);
     } catch (err) {
       setError(extractErrorMessage(err));

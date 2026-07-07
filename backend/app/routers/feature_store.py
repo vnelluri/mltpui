@@ -13,7 +13,7 @@ from app.auth.models import CurrentUser
 from app.db.models import FeatureView, utcnow_iso
 from app.db.repositories.feature_view_repo import FeatureViewRepository
 from app.dependencies import get_current_user, require_role
-from app.middleware.tenant_scope import enforce_tenant_access
+from app.middleware.tenant_scope import enforce_tenant_access, resolve_write_tenant
 from app.services.audit_service import audit_service
 from app.services.feature_store_service import (
     generate_offline_preview,
@@ -32,6 +32,8 @@ class FeatureDefRequest(BaseModel):
 
 class FeatureViewCreateRequest(BaseModel):
     name: str
+    # Target tenant: required for PlatformAdmin, own-tenant-only for others.
+    tenantId: Optional[str] = None
     description: Optional[str] = None
     entityColumn: str
     features: List[FeatureDefRequest]
@@ -45,7 +47,7 @@ async def create_feature_view(
     request: Request,
     user: CurrentUser = Depends(require_role("DataScientist")),
 ) -> FeatureView:
-    tenant_id = user.tenantId or "tenant-risk-analytics"
+    tenant_id = resolve_write_tenant(user, body.tenantId).tenantId
     fv = FeatureView(
         featureViewId=str(uuid.uuid4()),
         tenantId=tenant_id,

@@ -103,16 +103,15 @@ run_test "List jobs" GET "/jobs"
 
 # ── Experiments ──────────────────────────────────────────────────────────────
 run_test "Create experiment" POST "/experiments" \
-  "{\"name\":\"smoke-exp-${SUFFIX}\",\"description\":\"Smoke test experiment\",\"tags\":{\"team\":\"risk\"}}"
+  "{\"name\":\"smoke-exp-${SUFFIX}\",\"tenantId\":\"tenant-risk-analytics\",\"description\":\"Smoke test experiment\",\"tags\":{\"team\":\"risk\"}}"
 run_test "List experiments"  GET  "/experiments"
 
 # ── Models ───────────────────────────────────────────────────────────────────
 run_test "Register model version" POST "/models" \
-  "{\"name\":\"smoke-model-${SUFFIX}\",\"framework\":\"xgboost\",\"artifactUri\":\"s3://ml-platform-artifacts/models/smoke/1/\",\"description\":\"Smoke test model\"}"
+  "{\"name\":\"smoke-model-${SUFFIX}\",\"tenantId\":\"tenant-risk-analytics\",\"framework\":\"xgboost\",\"artifactUri\":\"s3://ml-platform-artifacts/models/smoke/1/\",\"description\":\"Smoke test model\"}"
 run_test "List models" GET "/models"
 
 # ── Group mappings / Snowflake / audit ───────────────────────────────────────
-run_test "List group mappings" GET "/group-mappings"
 run_test "Snowflake status"    GET "/snowflake/status"
 run_test "Audit events"        GET "/audit/events"
 

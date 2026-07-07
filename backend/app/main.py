@@ -8,11 +8,13 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 
 from app.config import settings
 from app.middleware.request_logging import RequestLoggingMiddleware
+from app.services.snowflake_service import KmsEncryptionError
 from app.routers import (
     audit,
     auth,
@@ -52,6 +54,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 app.add_middleware(RequestLoggingMiddleware)
+
+
+@app.exception_handler(KmsEncryptionError)
+async def kms_encryption_error_handler(request: Request, exc: KmsEncryptionError):
+    """Fail closed on token-encryption problems: the operation is refused
+    (503) rather than ever storing/using a token without real encryption."""
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
 
 app.include_router(health.router)
 app.include_router(auth.router)

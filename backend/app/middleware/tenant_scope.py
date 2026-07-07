@@ -39,6 +39,47 @@ def effective_tenant_filter(user: CurrentUser, requested_tenant_id: str | None =
     return user.tenantId
 
 
+def resolve_write_tenant(user: CurrentUser, requested_tenant_id: str | None):
+    """Resolve (and verify) the tenant a tenant-scoped WRITE lands in.
+
+    - PlatformAdmin has no tenant of their own: they must name the target
+      tenant explicitly — there is deliberately no fallback tenant.
+    - Everyone else always writes into their own tenant; naming a different
+      one is rejected rather than silently ignored.
+
+    Returns the ``Tenant`` record (404 if it does not exist).
+    """
+    from app.db.repositories.tenant_repo import TenantRepository
+
+    if user.is_platform_admin:
+        tenant_id = requested_tenant_id or user.tenantId
+        if not tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="PlatformAdmin must specify tenantId explicitly.",
+            )
+    else:
+        if not user.tenantId:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Current user has no tenant assigned.",
+            )
+        if requested_tenant_id and requested_tenant_id != user.tenantId:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="You may only create resources within your own tenant.",
+            )
+        tenant_id = user.tenantId
+
+    tenant = TenantRepository().get(tenant_id)
+    if tenant is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Tenant '{tenant_id}' not found.",
+        )
+    return tenant
+
+
 def require_own_tenant_write(user: CurrentUser, tenant_id: str) -> None:
     """Raise 403 unless the write target is the user's own tenant.
 

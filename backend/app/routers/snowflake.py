@@ -169,7 +169,10 @@ async def list_databases(user: CurrentUser = Depends(get_current_user)) -> List[
 @router.get("/databases/{db}/schemas")
 async def list_schemas(db: str, user: CurrentUser = Depends(get_current_user)) -> List[str]:
     token = _get_valid_token(user)
-    return snowflake_service.list_schemas(token, db)
+    try:
+        return snowflake_service.list_schemas(token, db)
+    except SqlValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.get("/databases/{db}/schemas/{schema}/tables")
@@ -177,7 +180,10 @@ async def list_tables(
     db: str, schema: str, user: CurrentUser = Depends(get_current_user)
 ) -> List[Dict[str, Any]]:
     token = _get_valid_token(user)
-    return snowflake_service.list_tables(token, db, schema)
+    try:
+        return snowflake_service.list_tables(token, db, schema)
+    except SqlValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
 
 @router.get("/databases/{db}/schemas/{schema}/tables/{table}/preview")
@@ -185,7 +191,10 @@ async def preview_table(
     db: str, schema: str, table: str, user: CurrentUser = Depends(get_current_user)
 ) -> Dict[str, Any]:
     token = _get_valid_token(user)
-    result = snowflake_service.get_table_preview(token, db, schema, table, rows=10)
+    try:
+        result = snowflake_service.get_table_preview(token, db, schema, table, rows=10)
+    except SqlValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return {
         "columns": result.columns,
         "rows": result.rows,

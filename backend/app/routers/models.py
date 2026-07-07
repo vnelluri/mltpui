@@ -13,7 +13,7 @@ from app.db.repositories.experiment_repo import ExperimentRepository
 from app.db.repositories.governance_repo import GovernanceRepository
 from app.db.repositories.model_repo import ModelRepository
 from app.dependencies import get_current_user, require_role
-from app.middleware.tenant_scope import enforce_tenant_access
+from app.middleware.tenant_scope import enforce_tenant_access, resolve_write_tenant
 from app.services.audit_service import audit_service
 from app.services.model_card_service import build_model_card
 
@@ -24,8 +24,42 @@ _exp_repo = ExperimentRepository()
 _gov_repo = GovernanceRepository()
 
 
+def _scope_tenant(user: CurrentUser, requested_tenant_id: Optional[str]) -> str:
+    """Resolve which tenant's model namespace a name-based endpoint targets.
+
+    Model names are namespaced per tenant, so cross-tenant roles
+    (PlatformAdmin/MRM) must say which tenant they mean via the ``tenantId``
+    query parameter; tenant-scoped users are always pinned to their own.
+    """
+    if user.sees_all_tenants:
+        tenant_id = requested_tenant_id or user.tenantId
+        if not tenant_id:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=(
+                    "Model names are tenant-scoped: cross-tenant roles must "
+                    "pass the tenantId query parameter."
+                ),
+            )
+        return tenant_id
+    if not user.tenantId:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current user has no tenant assigned.",
+        )
+    if requested_tenant_id and requested_tenant_id != user.tenantId:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You may only access models within your own tenant.",
+        )
+    return user.tenantId
+
+
 class ModelRegisterRequest(BaseModel):
     name: str
+    # Target tenant: required for PlatformAdmin (who has no tenant of their
+    # own); tenant-scoped users may omit it and any mismatch is rejected.
+    tenantId: Optional[str] = None
     runId: Optional[str] = None
     framework: Optional[str] = None
     artifactUri: Optional[str] = None
@@ -46,8 +80,8 @@ async def register_model(
     request: Request,
     user: CurrentUser = Depends(require_role("DataScientist")),
 ) -> ModelVersion:
-    tenant_id = user.tenantId or "tenant-risk-analytics"
-    next_version = _repo.latest_version_number(body.name) + 1
+    tenant_id = resolve_write_tenant(user, body.tenantId).tenantId
+    next_version = _repo.latest_version_number(tenant_id, body.name) + 1
     mv = ModelVersion(
         modelId=str(uuid.uuid4()),
         tenantId=tenant_id,
@@ -95,15 +129,23 @@ async def list_models(
 
 
 @router.get("/{name}/versions")
-async def list_versions(name: str, user: CurrentUser = Depends(get_current_user)) -> Dict[str, Any]:
-    versions = _repo.list_versions(name)
+async def list_versions(
+    name: str,
+    tenantId: Optional[str] = None,
+    user: CurrentUser = Depends(get_current_user),
+) -> Dict[str, Any]:
+    tenant_id = _scope_tenant(user, tenantId)
+    versions = _repo.list_versions(tenant_id, name)
     for v in versions:
         enforce_tenant_access(user, v.tenantId)
     return {"items": versions, "total": len(versions), "page": 1, "pageSize": len(versions) or 1}
 
 
-def _get_owned_version(name: str, ver: int, user: CurrentUser) -> ModelVersion:
-    mv = _repo.get_version(name, ver)
+def _get_owned_version(
+    name: str, ver: int, user: CurrentUser, requested_tenant_id: Optional[str]
+) -> ModelVersion:
+    tenant_id = _scope_tenant(user, requested_tenant_id)
+    mv = _repo.get_version(tenant_id, name, ver)
     if mv is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model version not found.")
     enforce_tenant_access(user, mv.tenantId)
@@ -111,8 +153,13 @@ def _get_owned_version(name: str, ver: int, user: CurrentUser) -> ModelVersion:
 
 
 @router.get("/{name}/versions/{ver}", response_model=ModelVersion)
-async def get_version(name: str, ver: int, user: CurrentUser = Depends(get_current_user)) -> ModelVersion:
-    return _get_owned_version(name, ver, user)
+async def get_version(
+    name: str,
+    ver: int,
+    tenantId: Optional[str] = None,
+    user: CurrentUser = Depends(get_current_user),
+) -> ModelVersion:
+    return _get_owned_version(name, ver, user, tenantId)
 
 
 @router.put("/{name}/versions/{ver}/stage", response_model=ModelVersion)
@@ -121,9 +168,10 @@ async def transition_stage(
     ver: int,
     body: StageTransitionRequest,
     request: Request,
+    tenantId: Optional[str] = None,
     user: CurrentUser = Depends(require_role("TenantAdmin")),
 ) -> ModelVersion:
-    mv = _get_owned_version(name, ver, user)
+    mv = _get_owned_version(name, ver, user, tenantId)
     if body.stage == ModelStage.PRODUCTION.value:
         if not _gov_repo.has_approved_review(mv.modelId):
             raise HTTPException(
@@ -149,8 +197,13 @@ async def transition_stage(
 
 
 @router.get("/{name}/versions/{ver}/card")
-async def get_model_card(name: str, ver: int, user: CurrentUser = Depends(get_current_user)) -> Dict[str, Any]:
-    mv = _get_owned_version(name, ver, user)
+async def get_model_card(
+    name: str,
+    ver: int,
+    tenantId: Optional[str] = None,
+    user: CurrentUser = Depends(get_current_user),
+) -> Dict[str, Any]:
+    mv = _get_owned_version(name, ver, user, tenantId)
     run = _exp_repo.get_run_by_id(mv.tenantId, mv.runId) if mv.runId else None
     reviews = _gov_repo.list_by_model(mv.modelId)
     return build_model_card(mv, run, reviews)
@@ -161,9 +214,10 @@ async def archive_version(
     name: str,
     ver: int,
     request: Request,
+    tenantId: Optional[str] = None,
     user: CurrentUser = Depends(require_role("TenantAdmin")),
 ) -> ModelVersion:
-    mv = _get_owned_version(name, ver, user)
+    mv = _get_owned_version(name, ver, user, tenantId)
     mv.stage = ModelStage.ARCHIVED.value
     updated = _repo.update(mv)
     audit_service.record(

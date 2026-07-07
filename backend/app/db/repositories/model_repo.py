@@ -16,7 +16,7 @@ class ModelRepository:
     def _item(self, mv: ModelVersion) -> dict:
         return {
             "entityType": "ModelVersion",
-            **Keys.model_version(mv.name, mv.version),
+            **Keys.model_version(mv.tenantId, mv.name, mv.version),
             **Keys.model_version_gsi(
                 mv.tenantId, mv.stage, mv.name, mv.version, mv.modelId
             ),
@@ -37,8 +37,10 @@ class ModelRepository:
         )
         return mv
 
-    def get_version(self, name: str, version: int) -> Optional[ModelVersion]:
-        resp = self.table.get_item(Key=Keys.model_version(name, version))
+    def get_version(
+        self, tenant_id: str, name: str, version: int
+    ) -> Optional[ModelVersion]:
+        resp = self.table.get_item(Key=Keys.model_version(tenant_id, name, version))
         item = strip_internal(resp.get("Item"))
         return ModelVersion(**item) if item else None
 
@@ -53,15 +55,15 @@ class ModelRepository:
             return None
         return ModelVersion(**strip_internal(items[0]))
 
-    def list_versions(self, name: str) -> List[ModelVersion]:
+    def list_versions(self, tenant_id: str, name: str) -> List[ModelVersion]:
         resp = self.table.query(
-            KeyConditionExpression=Key("PK").eq(f"MODEL#{name}")
+            KeyConditionExpression=Key("PK").eq(f"MODEL#{tenant_id}#{name}")
             & Key("SK").begins_with("VERSION#"),
         )
         return [ModelVersion(**strip_internal(i)) for i in resp.get("Items", [])]
 
-    def latest_version_number(self, name: str) -> int:
-        versions = self.list_versions(name)
+    def latest_version_number(self, tenant_id: str, name: str) -> int:
+        versions = self.list_versions(tenant_id, name)
         if not versions:
             return 0
         return max(v.version for v in versions)

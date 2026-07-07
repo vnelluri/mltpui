@@ -1,6 +1,7 @@
 """Training job submission, listing, status polling, cancellation, logs."""
 from __future__ import annotations
 
+import logging
 import uuid
 from typing import Any, Dict, List, Optional
 
@@ -21,18 +22,18 @@ from app.db.models import (
 )
 from app.db.repositories.experiment_repo import ExperimentRepository
 from app.db.repositories.job_repo import JobRepository
-from app.db.repositories.tenant_repo import TenantRepository
 from app.dependencies import get_current_user, require_role
-from app.middleware.tenant_scope import enforce_tenant_access
+from app.middleware.tenant_scope import enforce_tenant_access, resolve_write_tenant
 from app.services.audit_service import audit_service
 from app.services.job_service import TenantNotProvisionedError, job_service
 from app.services.snowflake_service import KmsCipher
+
+logger = logging.getLogger("ml_platform.jobs")
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 _job_repo = JobRepository()
 _exp_repo = ExperimentRepository()
-_tenant_repo = TenantRepository()
 
 # Every submitted job auto-creates a linked ExperimentRun so it always shows
 # up as a comparison row in Experiments — see submit_job(). Jobs submitted
@@ -64,6 +65,22 @@ def _get_or_create_default_experiment(tenant_id: str, user: CurrentUser) -> Expe
         if existing is not None:
             return existing
         raise
+
+
+def _mark_submit_failed(job: TrainingJob, secret_arn: Optional[str]) -> None:
+    """Best-effort cleanup when compute dispatch fails after the platform
+    record was written: delete the token secret, mark the job (and its linked
+    run) failed. Never masks the original dispatch error."""
+    job_service.delete_job_token(secret_arn)
+    job.status = JobStatus.FAILED.value
+    job.completedAt = job.completedAt or utcnow_iso()
+    try:
+        _job_repo.update(job)
+        _sync_run_with_job(job)
+    except Exception:
+        logger.exception(
+            "Could not mark job %s failed after dispatch error.", job.jobId
+        )
 
 
 def _sync_run_with_job(job: TrainingJob) -> None:
@@ -113,35 +130,12 @@ class JobCreateRequest(BaseModel):
 def _resolve_target_tenant(body: JobCreateRequest, user: CurrentUser) -> Tenant:
     """Resolve and gate the tenant a job is submitted into.
 
-    Enforces: an explicit, existing tenant (no fallback), tenant not
-    suspended, and dataplane provisioning complete.
+    On top of the shared write-tenant resolution (explicit tenant, no
+    fallback, must exist), job submission also requires the tenant to be
+    active (not suspended) and its dataplane provisioning complete.
     """
-    if user.is_platform_admin:
-        tenant_id = body.tenantId or user.tenantId
-        if not tenant_id:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="PlatformAdmin must specify tenantId when submitting a job.",
-            )
-    else:
-        if not user.tenantId:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Current user has no tenant assigned.",
-            )
-        if body.tenantId and body.tenantId != user.tenantId:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="You may only submit jobs into your own tenant.",
-            )
-        tenant_id = user.tenantId
-
-    tenant = _tenant_repo.get(tenant_id)
-    if tenant is None:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Tenant '{tenant_id}' not found.",
-        )
+    tenant = resolve_write_tenant(user, body.tenantId)
+    tenant_id = tenant.tenantId
     if tenant.status != TenantStatus.ACTIVE.value:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -193,12 +187,13 @@ async def submit_job(
         maxExecutors=body.maxExecutors,
     )
 
-    secret_arn = None
+    # Uses a Snowflake source: validate the connection and decrypt the cached
+    # token BEFORE creating any record or external resource, so validation
+    # failures (no cached token) leave nothing behind. The plaintext token
+    # never touches logs, S3, or DynamoDB.
+    snowflake_token: Optional[str] = None
+    snowflake_token_expires_at: Optional[str] = None
     if body.snowflakeDatabase:
-        # Uses a Snowflake source: retrieve the user's cached token, decrypt,
-        # and re-encrypt it as a short-lived Secrets Manager entry so the
-        # compute job can authenticate as the submitting user. The plaintext
-        # token never touches logs, S3, or DynamoDB.
         from app.db.repositories.snowflake_token_repo import SnowflakeTokenRepository
 
         cache = SnowflakeTokenRepository().get(user.userId)
@@ -207,17 +202,8 @@ async def submit_job(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Not connected to Snowflake. Connect first via POST /snowflake/connect.",
             )
-        plaintext = KmsCipher(tenant_id=tenant_id).decrypt(cache.snowflakeToken)
-        secret_arn = job_service.store_job_token(
-            plaintext, job.jobId, tenant_id, cache.expiresAt
-        )
-
-    try:
-        job = job_service.submit(job, tenant, secret_arn)
-    except TenantNotProvisionedError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
-        ) from exc
+        snowflake_token = KmsCipher(tenant_id=tenant_id).decrypt(cache.snowflakeToken)
+        snowflake_token_expires_at = cache.expiresAt
 
     # Auto-create a linked ExperimentRun so this job always has a comparison
     # row in Experiments — the training script can enrich it later via
@@ -237,7 +223,32 @@ async def submit_job(
     job.experimentId = experiment.experimentId
     job.experimentRunId = run.runId
 
+    # Persist the platform record BEFORE dispatching to compute: a crash after
+    # dispatch can no longer orphan a live EMR/SageMaker run the platform
+    # doesn't know about. If dispatch fails, the record is marked failed and
+    # the token secret is cleaned up.
     _job_repo.create(job)
+
+    secret_arn = None
+    try:
+        if snowflake_token is not None:
+            secret_arn = job_service.store_job_token(
+                snowflake_token, job.jobId, tenant_id, snowflake_token_expires_at
+            )
+        job = job_service.submit(job, tenant, secret_arn)
+    except TenantNotProvisionedError as exc:
+        _mark_submit_failed(job, secret_arn)
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail=str(exc)
+        ) from exc
+    except Exception as exc:
+        _mark_submit_failed(job, secret_arn)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Failed to dispatch job to the compute backend: {exc}",
+        ) from exc
+
+    _job_repo.update(job)
     audit_service.record(
         user=user,
         action="job.submit",

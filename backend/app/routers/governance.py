@@ -30,6 +30,9 @@ class ReviewCreateRequest(BaseModel):
     modelId: str
     modelName: str
     modelVersion: int
+    # Model names are tenant-scoped; needed only when falling back to a
+    # name-based lookup (i.e. modelId doesn't resolve).
+    tenantId: Optional[str] = None
 
 
 class ReviewDecisionRequest(BaseModel):
@@ -63,9 +66,11 @@ async def create_review(
     request: Request,
     user: CurrentUser = Depends(require_role("MRM")),
 ) -> GovernanceReview:
-    mv = _model_repo.get_by_model_id(body.modelId, body.modelVersion) or _model_repo.get_version(
-        body.modelName, body.modelVersion
-    )
+    mv = _model_repo.get_by_model_id(body.modelId, body.modelVersion)
+    if mv is None and body.tenantId:
+        # Name-based fallback — model names are tenant-scoped, so this path
+        # needs the tenant to be unambiguous.
+        mv = _model_repo.get_version(body.tenantId, body.modelName, body.modelVersion)
     if mv is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model version not found.")
     review = GovernanceReview(

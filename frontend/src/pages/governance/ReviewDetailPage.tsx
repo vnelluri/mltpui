@@ -35,7 +35,9 @@ export function ReviewDetailPage() {
         setComments(r.comments ?? '');
         setConditions(r.conditions ?? '');
         if (r.modelName && r.modelVersion) {
-          const c = await modelsApi.getCard(r.modelName, r.modelVersion);
+          // Model names are tenant-scoped; MRM reads across tenants, so the
+          // review's tenant disambiguates the lookup.
+          const c = await modelsApi.getCard(r.modelName, r.modelVersion, r.tenantId);
           if (!cancelled) setCard(c);
         }
       } catch (err) {

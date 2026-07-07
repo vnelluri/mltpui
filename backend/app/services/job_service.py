@@ -250,6 +250,9 @@ class JobService:
                 job.startedAt = job.startedAt or job.createdAt
                 job.completedAt = job.completedAt or utcnow_iso()
                 job.durationSeconds = int(elapsed)
+                # Terminal: the short-lived Snowflake token secret is no
+                # longer needed — clean it up (not only on cancel).
+                self.delete_job_token(job.snowflakeSecretArn)
             return job
 
         return self._poll_real_status(job)
@@ -261,6 +264,7 @@ class JobService:
         return job.emrApplicationId or settings.EMR_SERVERLESS_APPLICATION_ID
 
     def _poll_real_status(self, job: TrainingJob) -> TrainingJob:
+        previous_status = job.status
         try:
             if job.computeType == "emr_serverless" and job.emrJobRunId:
                 client = make_boto3_client("emr-serverless")
@@ -279,6 +283,11 @@ class JobService:
         except Exception:
             # If polling fails, keep the last known status.
             pass
+        if job.status in _TERMINAL_STATUSES and previous_status not in _TERMINAL_STATUSES:
+            if job.status != JobStatus.CANCELLED.value:
+                job.completedAt = job.completedAt or utcnow_iso()
+            # Terminal: clean up the short-lived Snowflake token secret.
+            self.delete_job_token(job.snowflakeSecretArn)
         return job
 
     @staticmethod

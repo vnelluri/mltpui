@@ -363,9 +363,15 @@ class Keys:
         return {"GSI1PK": f"RUN_TENANT#{tenant_id}", "GSI1SK": f"RUN#{run_id}"}
 
     # ModelVersion --------------------------------------------------------
+    # The tenant is part of the key: model names are namespaced PER TENANT,
+    # so two tenants registering the same model name get independent
+    # lineages instead of appending versions into each other's.
     @staticmethod
-    def model_version(name: str, version: int) -> Dict[str, str]:
-        return {"PK": f"MODEL#{name}", "SK": f"VERSION#{pad_version(version)}"}
+    def model_version(tenant_id: str, name: str, version: int) -> Dict[str, str]:
+        return {
+            "PK": f"MODEL#{tenant_id}#{name}",
+            "SK": f"VERSION#{pad_version(version)}",
+        }
 
     @staticmethod
     def model_version_gsi(tenant_id: str, stage: str, name: str, version: int, model_id: str) -> Dict[str, str]:

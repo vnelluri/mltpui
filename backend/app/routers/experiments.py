@@ -11,7 +11,7 @@ from app.auth.models import CurrentUser
 from app.db.models import Experiment, ExperimentRun, JobStatus
 from app.db.repositories.experiment_repo import ExperimentRepository
 from app.dependencies import get_current_user, require_role
-from app.middleware.tenant_scope import enforce_tenant_access
+from app.middleware.tenant_scope import enforce_tenant_access, resolve_write_tenant
 from app.services.audit_service import audit_service
 
 router = APIRouter(prefix="/experiments", tags=["experiments"])
@@ -21,6 +21,8 @@ _repo = ExperimentRepository()
 
 class ExperimentCreateRequest(BaseModel):
     name: str
+    # Target tenant: required for PlatformAdmin, own-tenant-only for others.
+    tenantId: Optional[str] = None
     description: Optional[str] = None
     tags: Dict[str, Any] = {}
 
@@ -57,7 +59,7 @@ async def create_experiment(
     request: Request,
     user: CurrentUser = Depends(require_role("TenantAdmin", "DataScientist")),
 ) -> Experiment:
-    tenant_id = user.tenantId or "tenant-risk-analytics"
+    tenant_id = resolve_write_tenant(user, body.tenantId).tenantId
     exp = Experiment(
         experimentId=str(uuid.uuid4()),
         tenantId=tenant_id,
