@@ -1,0 +1,8 @@
+# Local-development-only dependencies. Never installed in the production/
+# CI image (see Dockerfile — it only installs requirements.txt).
+#
+# moto's standalone server emulates DynamoDB, S3, KMS, and Secrets Manager
+# on a single local port with no Docker and no JVM required — a drop-in
+# swap for LocalStack from the app's point of view, since both are just an
+# AWS-compatible HTTP endpoint that boto3 talks to via endpoint_url=.
+moto[server]==5.0.14

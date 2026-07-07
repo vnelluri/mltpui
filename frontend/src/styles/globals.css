@@ -1,0 +1,73 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  --brand-purple: #a6a3e0;
+  --brand-valhalla: #2e1a47;
+  --brand-white: #ffffff;
+  --bg-dark: #0a0614;
+  --bg-card: #120d22;
+  --bg-elevated: #1a1230;
+  --text-primary: #f0eeff;
+  --text-secondary: #9b94c0;
+  --text-muted: #5a5280;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  background-color: var(--bg-dark);
+  color: var(--text-primary);
+  font-family: 'Inter', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Scrollbars */
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+::-webkit-scrollbar-track {
+  background: #0a0614;
+}
+::-webkit-scrollbar-thumb {
+  background: #2e1a47;
+  border-radius: 6px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #3d2560;
+}
+
+/* Grid pattern used on the login left panel */
+.login-grid-pattern {
+  background-image:
+    linear-gradient(rgba(166, 163, 224, 0.08) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(166, 163, 224, 0.08) 1px, transparent 1px);
+  background-size: 32px 32px;
+}
+
+/* Make the dark Truist wordmark render white on dark surfaces */
+.logo-invert {
+  filter: brightness(0) invert(1);
+}
+
+/* Focus ring consistency */
+*:focus-visible {
+  outline: 2px solid var(--brand-purple);
+  outline-offset: 2px;
+}
+
+input,
+select,
+textarea {
+  color-scheme: dark;
+}

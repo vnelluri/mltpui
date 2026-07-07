@@ -1,0 +1,32 @@
+# Environment — .env.example is the committed template; the live .env may
+# hold real credentials (Entra/Snowflake secrets) and must never be committed.
+.env
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Node / frontend build
+node_modules/
+frontend/dist/
+frontend/.vite/
+
+# Local tooling state
+.claude/settings.local.json
+.claude/scheduled_tasks.lock
+
+# Editor / OS noise
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Preserved histories of the formerly-standalone backend/frontend repos
+# (single initial commits, remotes vnelluri/mlp + vnelluri/mltp). Safe to
+# delete once the monorepo is pushed; restore by renaming back to .git.
+.git.bak/

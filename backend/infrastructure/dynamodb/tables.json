@@ -1,0 +1,107 @@
+{
+  "AWSTemplateFormatVersion": "2010-09-09",
+  "Description": "Multi-Tenant ML Training Platform - single-table DynamoDB design with overloaded GSIs. One table (default name 'ml-platform') holds every entity (Tenant, GroupMapping, UserProfile, TrainingJob, Experiment, ExperimentRun, ModelVersion, GovernanceReview, AuditEvent, NotebookSession, SnowflakeTokenCache). Access patterns are served by three overloaded GSIs plus TTL on the SnowflakeTokenCache tokens.",
+
+  "Parameters": {
+    "TableName": {
+      "Type": "String",
+      "Default": "ml-platform",
+      "Description": "Name of the single DynamoDB table."
+    }
+  },
+
+  "Resources": {
+    "MlPlatformTable": {
+      "Type": "AWS::DynamoDB::Table",
+      "DeletionPolicy": "Retain",
+      "UpdateReplacePolicy": "Retain",
+      "Properties": {
+        "TableName": { "Ref": "TableName" },
+        "BillingMode": "PAY_PER_REQUEST",
+
+        "//": "Only key attributes are declared (schemaless items may carry any other attributes). PK/SK are the base primary key. GSI1/GSI2/GSI3 are overloaded string keys reused across entities.",
+        "AttributeDefinitions": [
+          { "AttributeName": "PK", "AttributeType": "S" },
+          { "AttributeName": "SK", "AttributeType": "S" },
+          { "AttributeName": "GSI1PK", "AttributeType": "S" },
+          { "AttributeName": "GSI1SK", "AttributeType": "S" },
+          { "AttributeName": "GSI2PK", "AttributeType": "S" },
+          { "AttributeName": "GSI2SK", "AttributeType": "S" },
+          { "AttributeName": "GSI3PK", "AttributeType": "S" },
+          { "AttributeName": "GSI3SK", "AttributeType": "S" }
+        ],
+
+        "KeySchema": [
+          { "AttributeName": "PK", "KeyType": "HASH" },
+          { "AttributeName": "SK", "KeyType": "RANGE" }
+        ],
+
+        "GlobalSecondaryIndexes": [
+          {
+            "//": "GSI1 = primary 'by tenantId' axis (overloaded). Examples of GSI1PK/GSI1SK per entity: Tenant status -> STATUS#<status> / TENANT#<tenantId>; GroupMapping -> TENANT#<tenantId> / GROUPMAPPING#<groupId>; UserProfile -> TENANT#<tenantId> / USER#<userId>; TrainingJob -> TENANT#<tenantId> / STATUS#<status>#JOB#<jobId>; Experiment -> TENANT#<tenantId> / EXPERIMENT#<experimentId>; ExperimentRun -> TENANT#<tenantId> / RUN#<runId>; ModelVersion -> TENANT#<tenantId> / STAGE#<stage>#MODEL#<name>#V#<version>; GovernanceReview -> TENANT#<tenantId> / REVIEW#<reviewId>; AuditEvent -> TENANT#<tenantId> / TS#<timestamp>#EVENT#<eventId>; NotebookSession -> TENANT#<tenantId> / SESSION#<sessionId>.",
+            "IndexName": "GSI1",
+            "KeySchema": [
+              { "AttributeName": "GSI1PK", "KeyType": "HASH" },
+              { "AttributeName": "GSI1SK", "KeyType": "RANGE" }
+            ],
+            "Projection": { "ProjectionType": "ALL" }
+          },
+          {
+            "//": "GSI2 = secondary axis (overloaded). Examples: UserProfile by email -> EMAIL#<email> / USER#<userId>; TrainingJob by userId -> USER#<userId> / TS#<createdAt>#JOB#<jobId>; ExperimentRun by experimentId -> EXPERIMENT#<experimentId> / RUN#<runId>; ModelVersion by name+version -> MODELNAME#<name> / V#<version>; GovernanceReview by modelId -> MODEL#<modelId> / REVIEW#<reviewId>; AuditEvent by userId+timestamp -> USER#<userId> / TS#<timestamp>#EVENT#<eventId>; NotebookSession by userId -> USER#<userId> / SESSION#<sessionId>.",
+            "IndexName": "GSI2",
+            "KeySchema": [
+              { "AttributeName": "GSI2PK", "KeyType": "HASH" },
+              { "AttributeName": "GSI2SK", "KeyType": "RANGE" }
+            ],
+            "Projection": { "ProjectionType": "ALL" }
+          },
+          {
+            "//": "GSI3 = tertiary axis (overloaded). Examples: GroupMapping by role -> ROLE#<role> / GROUPMAPPING#<groupId>; Tenant by status (global) -> ENTITY#TENANT / STATUS#<status>#<tenantId>; UserProfile by role -> ROLE#<role> / USER#<userId>. Provides a third query dimension for entities that need it.",
+            "IndexName": "GSI3",
+            "KeySchema": [
+              { "AttributeName": "GSI3PK", "KeyType": "HASH" },
+              { "AttributeName": "GSI3SK", "KeyType": "RANGE" }
+            ],
+            "Projection": { "ProjectionType": "ALL" }
+          }
+        ],
+
+        "TimeToLiveSpecification": {
+          "//": "Used by SnowflakeTokenCache items (attribute 'expiresAt', epoch seconds). Harmless no-op for items without that attribute.",
+          "AttributeName": "expiresAt",
+          "Enabled": true
+        },
+
+        "PointInTimeRecoverySpecification": {
+          "PointInTimeRecoveryEnabled": true
+        },
+
+        "SSESpecification": {
+          "SSEEnabled": true
+        },
+
+        "Tags": [
+          { "Key": "Application", "Value": "ml-training-platform" },
+          { "Key": "ManagedBy", "Value": "CloudFormation" }
+        ]
+      }
+    }
+  },
+
+  "Outputs": {
+    "TableName": {
+      "Description": "DynamoDB table name",
+      "Value": { "Ref": "MlPlatformTable" },
+      "Export": { "Name": "MlPlatform-TableName" }
+    },
+    "TableArn": {
+      "Description": "DynamoDB table ARN",
+      "Value": { "Fn::GetAtt": ["MlPlatformTable", "Arn"] },
+      "Export": { "Name": "MlPlatform-TableArn" }
+    },
+    "StreamArn": {
+      "Description": "DynamoDB table ARN (for reference in IAM policies)",
+      "Value": { "Fn::GetAtt": ["MlPlatformTable", "Arn"] }
+    }
+  }
+}

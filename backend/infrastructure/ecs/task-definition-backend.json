@@ -1,0 +1,72 @@
+{
+  "family": "ml-platform-backend",
+  "requiresCompatibilities": ["FARGATE"],
+  "networkMode": "awsvpc",
+  "cpu": "512",
+  "memory": "1024",
+  "runtimePlatform": {
+    "cpuArchitecture": "X86_64",
+    "operatingSystemFamily": "LINUX"
+  },
+  "executionRoleArn": "arn:aws:iam::ACCOUNT_ID:role/ml-platform-ecs-execution-role",
+  "taskRoleArn": "arn:aws:iam::ACCOUNT_ID:role/ml-platform-backend-task-role",
+  "containerDefinitions": [
+    {
+      "name": "backend",
+      "image": "ACCOUNT_ID.dkr.ecr.us-east-1.amazonaws.com/ml-platform-backend:latest",
+      "essential": true,
+      "portMappings": [
+        {
+          "name": "http",
+          "containerPort": 8000,
+          "hostPort": 8000,
+          "protocol": "tcp",
+          "appProtocol": "http"
+        }
+      ],
+      "environment": [
+        { "name": "AUTH_MODE", "value": "prod" },
+        { "name": "AWS_REGION", "value": "us-east-1" },
+        { "name": "DYNAMODB_TABLE_NAME", "value": "ml-platform" },
+        { "name": "EMR_MOCK_MODE", "value": "false" },
+        { "name": "SAGEMAKER_MOCK_MODE", "value": "false" },
+        { "name": "SNOWFLAKE_MOCK_MODE", "value": "false" },
+        { "name": "SNOWFLAKE_OAUTH_INTEGRATION_NAME", "value": "ml_platform_oauth" },
+        { "name": "SNOWFLAKE_DEFAULT_WAREHOUSE", "value": "COMPUTE_WH" },
+        { "name": "SECRETS_MANAGER_JOB_TOKEN_PREFIX", "value": "ml-platform/job-tokens/" },
+        { "name": "S3_ARTIFACTS_BUCKET", "value": "ml-platform-artifacts" }
+      ],
+      "secrets": [
+        { "name": "ENTRA_TENANT_ID", "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/ml-platform/entra/tenant-id" },
+        { "name": "ENTRA_CLIENT_ID", "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/ml-platform/entra/client-id" },
+        { "name": "ENTRA_AUDIENCE", "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/ml-platform/entra/audience" },
+        { "name": "CORS_ALLOWED_ORIGINS", "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/ml-platform/cors/allowed-origins" },
+        { "name": "EMR_SERVERLESS_APPLICATION_ID", "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/ml-platform/emr/application-id" },
+        { "name": "EMR_STUDIO_ID", "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/ml-platform/emr/studio-id" },
+        { "name": "SAGEMAKER_EXECUTION_ROLE_ARN", "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/ml-platform/sagemaker/execution-role-arn" },
+        { "name": "SAGEMAKER_DOMAIN_ID", "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/ml-platform/sagemaker/domain-id" },
+        { "name": "SNOWFLAKE_ACCOUNT", "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/ml-platform/snowflake/account" },
+        { "name": "SNOWFLAKE_TOKEN_URL", "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/ml-platform/snowflake/token-url" },
+        { "name": "SNOWFLAKE_OAUTH_CLIENT_ID", "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/ml-platform/snowflake/oauth-client-id" },
+        { "name": "SNOWFLAKE_OAUTH_CLIENT_SECRET", "valueFrom": "arn:aws:secretsmanager:us-east-1:ACCOUNT_ID:secret:ml-platform/snowflake/oauth-client-secret" },
+        { "name": "KMS_SNOWFLAKE_KEY_ARN", "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/ml-platform/kms/snowflake-key-arn" }
+      ],
+      "healthCheck": {
+        "command": ["CMD-SHELL", "curl -f http://localhost:8000/health || exit 1"],
+        "interval": 30,
+        "timeout": 5,
+        "retries": 3,
+        "startPeriod": 30
+      },
+      "logConfiguration": {
+        "logDriver": "awslogs",
+        "options": {
+          "awslogs-group": "/ecs/ml-platform-backend",
+          "awslogs-region": "us-east-1",
+          "awslogs-stream-prefix": "backend",
+          "awslogs-create-group": "true"
+        }
+      }
+    }
+  ]
+}

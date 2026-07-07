@@ -1,0 +1,147 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Multi-Tenant ML Training Platform — local development stack.
+# Brings up the ENTIRE platform with zero real AWS / Entra / Snowflake creds:
+#   localstack  → DynamoDB, S3, STS, KMS, Secrets Manager
+#   dynamo-init → one-shot: KMS setup → create tables → seed demo data
+#   backend     → FastAPI (AUTH_MODE=dev, all *_MOCK_MODE=true)
+#   frontend    → Vite dev server with HMR
+#
+# Root `.env` (created from .env.example) is auto-loaded by docker compose, so
+# users can override DEV_USER_ROLE etc. without editing this file.
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+  # ── LocalStack: emulates the AWS services the platform depends on ──────────
+  localstack:
+    image: localstack/localstack:3
+    container_name: mlp-localstack
+    ports:
+      - "4566:4566"
+    environment:
+      SERVICES: dynamodb,s3,sts,kms,secretsmanager
+      DEBUG: "0"
+      AWS_DEFAULT_REGION: us-east-1
+      # LocalStack accepts any credentials; these keep boto3 happy.
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+    volumes:
+      - localstack-data:/var/lib/localstack
+      # Lets LocalStack manage the ephemeral docker containers it may spawn.
+      - "/var/run/docker.sock:/var/run/docker.sock"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    networks:
+      - ml-platform
+
+  # ── One-shot bootstrap: KMS key + tables + demo data ───────────────────────
+  # Reuses the backend `dev` image (has boto3 + python + the scripts) instead of
+  # a bare aws-cli image, because these steps are Python scripts.
+  dynamo-init:
+    build:
+      context: ./backend
+      target: dev
+    container_name: mlp-dynamo-init
+    depends_on:
+      localstack:
+        condition: service_healthy
+    environment:
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: us-east-1
+      AWS_DEFAULT_REGION: us-east-1
+      DYNAMODB_TABLE_NAME: ml-platform
+      DYNAMODB_ENDPOINT_URL: http://localstack:4566
+      S3_ENDPOINT_URL: http://localstack:4566
+      S3_ARTIFACTS_BUCKET: ml-platform-artifacts
+      KMS_ENDPOINT_URL: http://localstack:4566
+      SECRETS_MANAGER_ENDPOINT_URL: http://localstack:4566
+    # KMS key must exist before tables/seed reference it; run in order.
+    command: >
+      sh -c "python scripts/setup_local_kms.py &&
+             python scripts/create_tables.py &&
+             python scripts/seed_demo_data.py"
+    restart: "no"
+    networks:
+      - ml-platform
+
+  # ── Backend: FastAPI ───────────────────────────────────────────────────────
+  backend:
+    build:
+      context: ./backend
+      target: dev
+    container_name: mlp-backend
+    ports:
+      - "8000:8000"
+    depends_on:
+      localstack:
+        condition: service_healthy
+      dynamo-init:
+        condition: service_completed_successfully
+    volumes:
+      # Bind mount for hot reload; anonymous volume keeps the image's site-packages.
+      - ./backend:/app
+    environment:
+      # ── DynamoDB / AWS (LocalStack) ──
+      DYNAMODB_TABLE_NAME: ml-platform
+      DYNAMODB_ENDPOINT_URL: http://localstack:4566
+      S3_ENDPOINT_URL: http://localstack:4566
+      S3_ARTIFACTS_BUCKET: ml-platform-artifacts
+      KMS_ENDPOINT_URL: http://localstack:4566
+      SECRETS_MANAGER_ENDPOINT_URL: http://localstack:4566
+      SECRETS_MANAGER_JOB_TOKEN_PREFIX: ml-platform/job-tokens/
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_REGION: us-east-1
+      AWS_DEFAULT_REGION: us-east-1
+      # ── Auth (dev bypass) ──
+      AUTH_MODE: dev
+      DEV_USER_ID: ${DEV_USER_ID:-dev-user-001}
+      DEV_USER_EMAIL: ${DEV_USER_EMAIL:-dev@local.test}
+      DEV_USER_NAME: ${DEV_USER_NAME:-Dev User}
+      DEV_USER_ROLE: ${DEV_USER_ROLE:-PlatformAdmin}
+      DEV_USER_TENANT_ID: ${DEV_USER_TENANT_ID:-tenant-risk-analytics}
+      # ── Mock external integrations ──
+      SNOWFLAKE_MOCK_MODE: "true"
+      EMR_MOCK_MODE: "true"
+      SAGEMAKER_MOCK_MODE: "true"
+      # ── CORS ──
+      CORS_ALLOWED_ORIGINS: '["http://localhost:3000"]'
+    networks:
+      - ml-platform
+
+  # ── Frontend: React + Vite dev server ──────────────────────────────────────
+  frontend:
+    build:
+      context: ./frontend
+      target: dev
+    container_name: mlp-frontend
+    ports:
+      - "3000:3000"
+    depends_on:
+      - backend
+    volumes:
+      - ./frontend:/app
+      # Anonymous volume preserves node_modules installed in the image.
+      - /app/node_modules
+    environment:
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:8000}
+      VITE_DEMO_MODE: "true"
+      # The frontend dev script's own backend-readiness check runs inside
+      # this container, where "localhost" means the frontend container
+      # itself — reach the backend via Compose's internal DNS instead.
+      # VITE_API_BASE_URL above stays localhost:8000 on purpose: that value
+      # is served to the browser, which runs on the host, not in a container.
+      BACKEND_HEALTH_CHECK_URL: http://backend:8000
+    networks:
+      - ml-platform
+
+networks:
+  ml-platform:
+    driver: bridge
+
+volumes:
+  localstack-data:
