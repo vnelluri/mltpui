@@ -139,42 +139,58 @@ class KmsCipher:
     _LOCAL_PREFIX = "local:"
     _KMS_PREFIX = "kms:"
 
-    def __init__(self, tenant_id: Optional[str] = None) -> None:
+    def __init__(
+        self, tenant_id: Optional[str] = None, key_arn: Optional[str] = None
+    ) -> None:
         self.tenant_id = tenant_id
         self._client = make_boto3_client("kms", settings.KMS_ENDPOINT_URL)
+        # Resolved lazily and memoized (only encrypt needs it — decrypt lets
+        # KMS infer the key from the ciphertext). Callers that already hold
+        # the tenant record can pass key_arn to skip the lookup entirely.
+        self._key_arn: Optional[str] = key_arn
 
     @property
     def _fail_closed(self) -> bool:
         return bool(settings.KMS_SNOWFLAKE_KEY_ARN) or not settings.is_dev_auth
 
     def _key_id(self) -> str:
-        if settings.KMS_SNOWFLAKE_KEY_ARN:
-            return settings.KMS_SNOWFLAKE_KEY_ARN
+        if self._key_arn is None:
+            self._key_arn = self._resolve_key_id()
+        return self._key_arn
+
+    def _resolve_key_id(self) -> str:
+        # The tenant's own key wins: in the control-plane/dataplane account
+        # split each tenant has a dedicated dataplane key (aliases don't
+        # resolve cross-account, so the full ARN written back to the Tenant
+        # record is authoritative). The platform-wide setting is the
+        # single-account fallback.
         if self.tenant_id:
-            # Prefer the tenant record's key ARN (written back by the
-            # provisioning pipeline) — required in the control-plane/
-            # dataplane account split, where aliases don't resolve across
-            # accounts and access comes from the key policy.
             from app.db.repositories.tenant_repo import TenantRepository
 
             tenant = TenantRepository().get(self.tenant_id)
             if tenant is not None and tenant.kmsKeyArn:
                 return tenant.kmsKeyArn
-            # Same-account/local fallback: tenant alias convention.
+        if settings.KMS_SNOWFLAKE_KEY_ARN:
+            return settings.KMS_SNOWFLAKE_KEY_ARN
+        if self.tenant_id:
             return f"alias/ml-platform-snowflake-{self.tenant_id}"
         return "alias/ml-platform-snowflake"
 
     def encrypt(self, plaintext: str) -> str:
+        # Resolve the key id OUTSIDE the try: it may hit DynamoDB, and a
+        # database error must not be misclassified as a KMS failure (which
+        # would trip the dev fallback or mask the real cause).
+        key_id = self._key_id()
         try:
             resp = self._client.encrypt(
-                KeyId=self._key_id(),
+                KeyId=key_id,
                 Plaintext=plaintext.encode("utf-8"),
             )
             blob = resp["CiphertextBlob"]
             return self._KMS_PREFIX + base64.b64encode(blob).decode("ascii")
         except Exception as exc:
             if self._fail_closed:
-                logger.error("KMS encrypt failed (key %s): %s", self._key_id(), exc)
+                logger.error("KMS encrypt failed (key %s): %s", key_id, exc)
                 raise KmsEncryptionError(
                     "Token encryption via KMS failed; refusing to store the "
                     "token without real encryption."

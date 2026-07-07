@@ -14,20 +14,30 @@ locals {
   account_id = data.aws_caller_identity.current.account_id
   ssm_arn    = "arn:aws:ssm:${var.region}:${local.account_id}:parameter${var.ssm_parameter_prefix}"
 
+  # In the account split each tenant has its own dataplane KMS key
+  # (Tenant.kmsKeyArn, which the app prefers), so the platform-wide fallback
+  # key is only injected for single-account deployments — otherwise its SSM
+  # parameter would be a required-but-unused dependency.
+  split_enabled = var.dataplane_runtime_role_arn != null
+
   # SSM-backed config injected as container secrets (matches app/config.py).
-  ssm_secrets = {
-    ENTRA_TENANT_ID           = "${local.ssm_arn}/entra/tenant-id"
-    ENTRA_CLIENT_ID           = "${local.ssm_arn}/entra/client-id"
-    ENTRA_AUDIENCE            = "${local.ssm_arn}/entra/audience"
-    CORS_ALLOWED_ORIGINS      = "${local.ssm_arn}/cors/allowed-origins"
-    EMR_STUDIO_URL            = "${local.ssm_arn}/emr/studio-url"
-    SAGEMAKER_DOMAIN_ID       = "${local.ssm_arn}/sagemaker/domain-id"
-    SAGEMAKER_TRAINING_IMAGE  = "${local.ssm_arn}/sagemaker/training-image"
-    SNOWFLAKE_ACCOUNT         = "${local.ssm_arn}/snowflake/account"
-    SNOWFLAKE_TOKEN_URL       = "${local.ssm_arn}/snowflake/token-url"
-    SNOWFLAKE_OAUTH_CLIENT_ID = "${local.ssm_arn}/snowflake/oauth-client-id"
-    KMS_SNOWFLAKE_KEY_ARN     = "${local.ssm_arn}/kms/snowflake-key-arn"
-  }
+  ssm_secrets = merge(
+    {
+      ENTRA_TENANT_ID           = "${local.ssm_arn}/entra/tenant-id"
+      ENTRA_CLIENT_ID           = "${local.ssm_arn}/entra/client-id"
+      ENTRA_AUDIENCE            = "${local.ssm_arn}/entra/audience"
+      CORS_ALLOWED_ORIGINS      = "${local.ssm_arn}/cors/allowed-origins"
+      EMR_STUDIO_URL            = "${local.ssm_arn}/emr/studio-url"
+      SAGEMAKER_DOMAIN_ID       = "${local.ssm_arn}/sagemaker/domain-id"
+      SAGEMAKER_TRAINING_IMAGE  = "${local.ssm_arn}/sagemaker/training-image"
+      SNOWFLAKE_ACCOUNT         = "${local.ssm_arn}/snowflake/account"
+      SNOWFLAKE_TOKEN_URL       = "${local.ssm_arn}/snowflake/token-url"
+      SNOWFLAKE_OAUTH_CLIENT_ID = "${local.ssm_arn}/snowflake/oauth-client-id"
+    },
+    local.split_enabled ? {} : {
+      KMS_SNOWFLAKE_KEY_ARN = "${local.ssm_arn}/kms/snowflake-key-arn"
+    },
+  )
 
   plain_environment = {
     AUTH_MODE                        = "prod"
@@ -124,10 +134,25 @@ data "aws_iam_policy_document" "task" {
     resources = ["arn:aws:s3:::${var.artifacts_bucket}/*"]
   }
 
+  # KMS for Snowflake-token encryption AND the artifacts bucket's SSE key.
+  # Scoped by the `platform` resource tag rather than a static ARN list, so
+  # per-tenant keys created dynamically by the tmt-dataplane reconcile
+  # pipeline are covered without re-applying this module. GenerateDataKey is
+  # needed for S3 SSE-KMS (encrypt-on-write). Cross-account use is still
+  # gated by each key's key policy (granted to this task role by
+  # tmt-dataplane); this identity policy is the second required half.
   statement {
-    sid       = "SnowflakeTokenKms"
-    actions   = ["kms:Encrypt", "kms:Decrypt", "kms:DescribeKey"]
-    resources = var.kms_snowflake_key_arns
+    sid = "PlatformKmsKeys"
+    actions = [
+      "kms:Encrypt", "kms:Decrypt", "kms:DescribeKey",
+      "kms:GenerateDataKey", "kms:ReEncrypt*",
+    ]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "kms:ResourceTag/platform"
+      values   = [var.name_prefix]
+    }
   }
 
   statement {

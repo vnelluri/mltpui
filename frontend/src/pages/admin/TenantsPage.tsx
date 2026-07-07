@@ -55,10 +55,9 @@ export function TenantsPage() {
       setFormError('Tenant ID and name are required.');
       return;
     }
-    if (!/^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$/.test(id)) {
-      setFormError('Tenant ID must be a lowercase slug (letters, digits, hyphens; 3–50 chars).');
-      return;
-    }
+    // The exact slug rule (charset + length, tied to IAM/group-name limits)
+    // is enforced by the backend; surface its 400 rather than duplicating the
+    // regex here, where it would silently drift from the server's.
     setSaving(true);
     setFormError(null);
     try {

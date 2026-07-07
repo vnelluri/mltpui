@@ -10,9 +10,10 @@ from __future__ import annotations
 import json
 import uuid
 from datetime import datetime, timezone
-from typing import Optional, Tuple
+from typing import Optional
 
 from app.config import settings
+from app.db.client import make_boto3_client
 from app.db.models import JobStatus, Tenant, TrainingJob, utcnow_iso
 from app.services.dataplane_service import dataplane_client
 
@@ -63,11 +64,16 @@ class JobService:
         )
         secret_name = f"{settings.SECRETS_MANAGER_JOB_TOKEN_PREFIX}{job_id}"
         secret_string = json.dumps({**payload, "tenantId": tenant_id})
+        # Tag with tenantId so the dataplane runtime role's ABAC policy can
+        # scope secret access to the session-tagged tenant (defense in depth
+        # for the account split).
+        tags = [{"Key": "tenantId", "Value": tenant_id}]
         try:
             resp = client.create_secret(
                 Name=secret_name,
                 SecretString=secret_string,
                 Description=f"Short-lived credentials for job {job_id}",
+                Tags=tags,
             )
             return resp["ARN"]
         except client.exceptions.ResourceExistsException:
@@ -77,13 +83,17 @@ class JobService:
             return resp["ARN"]
 
     def delete_job_token(self, secret_arn: Optional[str], tenant_id: str) -> None:
-        """Delete a job token secret after the job completes/fails."""
+        """Delete a job token secret after the job completes/fails.
+
+        Best-effort: building the (possibly assume-role) client is inside the
+        try so an STS/dataplane failure in split mode never propagates out of
+        cleanup and masks the caller's real error."""
         if not secret_arn or secret_arn.startswith("mock-secret-arn/"):
             return
-        client = dataplane_client(
-            "secretsmanager", tenant_id, settings.SECRETS_MANAGER_ENDPOINT_URL
-        )
         try:
+            client = dataplane_client(
+                "secretsmanager", tenant_id, settings.SECRETS_MANAGER_ENDPOINT_URL
+            )
             client.delete_secret(
                 SecretId=secret_arn, ForceDeleteWithoutRecovery=True
             )
@@ -192,6 +202,9 @@ class JobService:
                 "VolumeSizeInGB": job.volumeSizeGb,
             },
             StoppingCondition={"MaxRuntimeInSeconds": 86400},
+            # tenantId tag lets the dataplane runtime role's ABAC policy scope
+            # describe/stop to the session-tagged tenant.
+            Tags=[{"Key": "tenantId", "Value": job.tenantId}],
         )
         return training_job_name
 
@@ -268,13 +281,27 @@ class JobService:
         # the (deprecated) platform-wide setting.
         return job.emrApplicationId or settings.EMR_SERVERLESS_APPLICATION_ID
 
+    @staticmethod
+    def _emr_client_and_app(job: TrainingJob):
+        """Return (emr client, applicationId) for polling/cancel.
+
+        A per-tenant application lives in the DATAPLANE account, reached via
+        the tenant-scoped assumed role. A legacy job (no emrApplicationId)
+        used the deprecated platform-wide application in the CONTROL-PLANE
+        account, so it must be reached with the backend's own credentials —
+        never the dataplane role, which cannot see it and would silently
+        AccessDenied, stranding the job's status forever."""
+        if job.emrApplicationId:
+            return dataplane_client("emr-serverless", job.tenantId), job.emrApplicationId
+        return make_boto3_client("emr-serverless"), settings.EMR_SERVERLESS_APPLICATION_ID
+
     def _poll_real_status(self, job: TrainingJob) -> TrainingJob:
         previous_status = job.status
         try:
             if job.computeType == "emr_serverless" and job.emrJobRunId:
-                client = dataplane_client("emr-serverless", job.tenantId)
+                client, application_id = self._emr_client_and_app(job)
                 resp = client.get_job_run(
-                    applicationId=self._emr_application_id(job),
+                    applicationId=application_id,
                     jobRunId=job.emrJobRunId,
                 )
                 state = resp["jobRun"]["state"]
@@ -328,9 +355,9 @@ class JobService:
         if not is_mock:
             try:
                 if job.computeType == "emr_serverless" and job.emrJobRunId:
-                    client = dataplane_client("emr-serverless", job.tenantId)
+                    client, application_id = self._emr_client_and_app(job)
                     client.cancel_job_run(
-                        applicationId=self._emr_application_id(job),
+                        applicationId=application_id,
                         jobRunId=job.emrJobRunId,
                     )
                 elif job.computeType == "sagemaker" and job.sagemakerTrainingJobName:

@@ -491,9 +491,6 @@ curl -s -X POST http://localhost:8000/tenants \
 resource names — chosen once at creation, never changeable. The `name` is the
 display label it maps to, editable any time.
 
-```bash
-```
-
 **List jobs** (scoped automatically to the caller's tenant unless PlatformAdmin)
 
 ```bash

@@ -31,7 +31,13 @@ _model_repo = ModelRepository()
 # prefix, and the dataplane resource names — so it is chosen by the admin at
 # creation (never generated) and must be a stable lowercase slug. The Tenant
 # record then maps this ID to the human display name and config.
-_TENANT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$")
+#
+# Max length 30: the dataplane execution role name is
+# "{name_prefix}-tenant-{tenantId}-exec" ("ml-platform-tenant-…-exec" = 24
+# fixed chars), and IAM role names cap at 64 — a longer slug would pass
+# validation here and then fail terraform apply in the provisioning pipeline.
+_TENANT_ID_MAX = 30
+_TENANT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,28}[a-z0-9]$")
 
 
 class TenantCreateRequest(BaseModel):
@@ -72,8 +78,8 @@ async def create_tenant(
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=(
-                "tenantId must be a lowercase slug (letters, digits, hyphens; "
-                "3-50 chars) — it appears in the AD group names "
+                f"tenantId must be a lowercase slug (letters, digits, hyphens; "
+                f"3-{_TENANT_ID_MAX} chars) — it appears in the AD group names "
                 "(myapp-<tenantId>-<role>) and S3 prefixes."
             ),
         )

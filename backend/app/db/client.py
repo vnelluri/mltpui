@@ -48,9 +48,20 @@ def _credentials(endpoint_url: Optional[str]) -> Dict[str, str]:
     return creds
 
 
-def make_boto3_client(service: str, endpoint_url: Optional[str] = None):
-    """Create (and cache) a boto3 client for ``service``."""
-    key = f"{service}:{endpoint_url}"
+def make_boto3_client(
+    service: str,
+    endpoint_url: Optional[str] = None,
+    credentials: Optional[Dict[str, str]] = None,
+    cache_key: Optional[str] = None,
+):
+    """Create (and cache) a boto3 client for ``service``.
+
+    ``credentials`` overrides the default credential resolution (used for
+    cross-account assumed-role sessions); when supplied, callers must also
+    pass a ``cache_key`` that changes whenever the credentials rotate, so a
+    stale-credential client is never reused.
+    """
+    key = cache_key or f"{service}:{endpoint_url}"
     client = _client_cache.get(key)
     if client is not None:
         return client
@@ -60,7 +71,7 @@ def make_boto3_client(service: str, endpoint_url: Optional[str] = None):
             kwargs: Dict[str, Any] = {
                 "region_name": settings.AWS_REGION,
                 "config": _BOTO_CONFIG,
-                **_credentials(endpoint_url),
+                **(credentials if credentials is not None else _credentials(endpoint_url)),
             }
             if endpoint_url:
                 kwargs["endpoint_url"] = endpoint_url

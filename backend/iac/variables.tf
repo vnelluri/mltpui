@@ -80,11 +80,6 @@ variable "snowflake_oauth_secret_arn" {
   type        = string
 }
 
-variable "kms_snowflake_key_arns" {
-  description = "KMS key ARNs the backend may Encrypt/Decrypt with (Snowflake token keys, incl. per-tenant keys from tmt-dataplane)."
-  type        = list(string)
-}
-
 variable "job_token_secret_prefix" {
   description = "Secrets Manager name prefix for per-job Snowflake token secrets."
   type        = string
