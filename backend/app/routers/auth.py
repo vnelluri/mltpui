@@ -15,6 +15,20 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 @router.get("/me", response_model=CurrentUser)
 async def get_me(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+    """The resolved principal, with memberships enriched with tenant display
+    names (group names only carry tenant IDs; the Tenant table is where a
+    meaningful name is assigned). Done here rather than on every request —
+    only the UI needs names."""
+    from app.db.repositories.tenant_repo import TenantRepository
+
+    repo = TenantRepository()
+    names: dict = {}
+    for m in user.memberships:
+        if m.tenantId and m.tenantId not in names:
+            tenant = repo.get(m.tenantId)
+            names[m.tenantId] = tenant.name if tenant else None
+        if m.tenantId:
+            m.tenantName = names[m.tenantId]
     return user
 
 
@@ -50,8 +64,9 @@ async def token_info(request: Request) -> Dict[str, Any]:
         "groups": [],
         "note": (
             "No bearer token was supplied. This reflects the synthetic "
-            "AUTH_MODE=dev user; DEV_USER_ROLE/DEV_USER_TENANT_ID drive "
-            "role/tenant resolution directly, bypassing GroupMapping."
+            "AUTH_MODE=dev user; DEV_USER_ROLE/DEV_USER_TENANT_ID (and "
+            "DEV_USER_MEMBERSHIPS) drive role/tenant resolution directly, "
+            "bypassing the group-name convention."
         ),
     }
 

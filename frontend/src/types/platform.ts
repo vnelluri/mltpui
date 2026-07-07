@@ -47,21 +47,25 @@ export interface TenantMetrics {
   registeredModels: number;
 }
 
-export interface GroupMapping {
-  groupId: string;
+/** One (role, tenant) pair derived from a convention-named AD group. */
+export interface Membership {
   role: Role;
-  tenantId: string;
-  description: string;
-  createdAt: string;
-  createdBy: string;
+  tenantId: string | null;
+  /** Display name from the Tenant record (enriched by /auth/me). */
+  tenantName: string | null;
+  groupName: string | null;
 }
 
 export interface CurrentUser {
   userId: string;
   email: string;
   name: string;
+  /** ACTIVE role — selected from memberships via the X-Active-* headers. */
   role: Role;
+  /** ACTIVE tenant. */
   tenantId: string | null;
+  /** Everything the user's AD groups grant; switchable in the topbar. */
+  memberships: Membership[];
   resolvedFromGroupId: string | null;
 }
 

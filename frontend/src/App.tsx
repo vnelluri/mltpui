@@ -11,7 +11,6 @@ import { NoAccessPage } from './pages/NoAccessPage';
 import { AdminDashboard } from './pages/admin/AdminDashboard';
 import { TenantsPage } from './pages/admin/TenantsPage';
 import { TenantDetailPage } from './pages/admin/TenantDetailPage';
-import { GroupMappingsPage } from './pages/admin/GroupMappingsPage';
 
 import { TenantDashboard } from './pages/tenant/TenantDashboard';
 import { TenantSettingsPage } from './pages/tenant/TenantSettingsPage';
@@ -78,17 +77,6 @@ export default function App() {
           </RequireAuth>
         }
       />
-      <Route
-        path="/admin/group-mappings"
-        element={
-          <RequireAuth roles={['PlatformAdmin']}>
-            <Layout title="Group Mappings">
-              <GroupMappingsPage />
-            </Layout>
-          </RequireAuth>
-        }
-      />
-
       {/* ── Tenant Admin ───────────────────────────────────────────────── */}
       <Route
         path="/tenant"

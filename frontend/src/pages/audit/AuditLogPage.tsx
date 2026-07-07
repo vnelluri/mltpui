@@ -8,7 +8,7 @@ import type { AuditEvent } from '../../types/platform';
 
 const RESOURCE_TYPES = [
   '', 'Tenant', 'TrainingJob', 'Experiment', 'ExperimentRun', 'ModelVersion',
-  'GovernanceReview', 'NotebookSession', 'GroupMapping', 'SnowflakeTokenCache',
+  'GovernanceReview', 'NotebookSession', 'SnowflakeTokenCache',
 ];
 
 export function AuditLogPage() {

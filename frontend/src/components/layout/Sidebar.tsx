@@ -37,7 +37,6 @@ function itemsForRole(role: string | null | undefined): NavItem[] {
       return [
         { to: '/admin', label: 'Dashboard', icon: ICONS.dashboard },
         { to: '/admin/tenants', label: 'Tenants', icon: ICONS.tenants },
-        { to: '/admin/group-mappings', label: 'Group Mappings', icon: ICONS.groups },
         { to: '/workspace/experiments', label: 'Experiments', icon: ICONS.experiments },
         { to: '/workspace/jobs', label: 'Jobs', icon: ICONS.jobs },
         { to: '/workspace/models', label: 'Models', icon: ICONS.models },

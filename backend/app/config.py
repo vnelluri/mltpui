@@ -30,9 +30,38 @@ class Settings(BaseSettings):
     DEV_USER_NAME: str = "Dev User"
     DEV_USER_ROLE: str = "PlatformAdmin"
     DEV_USER_TENANT_ID: Optional[str] = "tenant-risk-analytics"
+    # Optional comma-separated extra memberships for the dev user, each as
+    # "Role:tenantId" (tenant blank for platform-wide roles) — lets the
+    # membership switcher be exercised locally, e.g.
+    # "DataScientist:tenant-risk-analytics,DataScientist:tenant-fraud-detection"
+    DEV_USER_MEMBERSHIPS: str = ""
+
+    # ── Group-name convention (source of truth for role/tenant) ─────────────
+    # Roles and tenants are DERIVED from Entra security-group NAMES — there is
+    # no mapping table to administer. Access is governed entirely by AD group
+    # membership, which the firm's IGA process already reviews/recertifies.
+    #
+    # SECURITY PRECONDITION: creation of groups matching this convention must
+    # be reserved to the governed provisioning process — with name-based
+    # resolution, the group name IS the access grant.
+    #
+    # Tenant-scoped groups must match GROUP_NAME_PATTERN (case-insensitive)
+    # with named captures `tenant` and `role`; the two platform-wide roles
+    # use the fixed names below. Parsed tenants that don't exist as Tenant
+    # records grant nothing.
+    GROUP_NAME_PATTERN: str = (
+        r"^myapp-(?P<tenant>[a-z0-9][a-z0-9-]*?)-(?P<role>datascientist|tenantadmin)$"
+    )
+    GROUP_NAME_PLATFORM_ADMIN: str = "myapp-platform-admin"
+    GROUP_NAME_MRM: str = "myapp-platform-mrm"
 
     ENTRA_TENANT_ID: Optional[str] = None
     ENTRA_CLIENT_ID: Optional[str] = None
+    # Client-credentials secret used ONLY for Microsoft Graph group-overage
+    # lookups (users in >200 groups get no `groups` claim in their token).
+    # Requires the GroupMember.Read.All application permission with admin
+    # consent on the app registration.
+    ENTRA_CLIENT_SECRET: Optional[str] = None
     ENTRA_AUDIENCE: str = "api://ml-training-platform"
 
     # ── AWS ─────────────────────────────────────────────────────────────────

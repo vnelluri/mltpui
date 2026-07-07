@@ -1,69 +1,135 @@
 """Shared FastAPI dependencies: auth resolution and role guards.
 
-``get_current_user`` is the single place tenancy/role resolution happens:
+``get_current_user`` is the single place role/tenant resolution happens:
 
 - ``AUTH_MODE=dev``: JWT validation is skipped entirely. A synthetic
-  ``CurrentUser`` is built from ``DEV_USER_*`` settings. No DynamoDB
-  GroupMapping lookup is performed. This branch is gated strictly by
-  ``settings.is_dev_auth`` and can never activate when ``AUTH_MODE=prod``.
-- ``AUTH_MODE=prod``: the bearer token is validated against Entra ID's JWKS,
-  the ``groups`` claim is extracted, and resolved against ``GroupMapping``
-  via :class:`GroupResolverService`. The resolution always re-runs from the
-  JWT on every request (never trusts a cached role, and nothing is persisted
-  — Entra ID + GroupMapping is the sole source of truth for identity, role,
-  and tenant; there is deliberately no local user directory to keep in
-  sync). If no group maps to a role, a 403 is raised with a message
-  instructing the user to contact their platform administrator.
+  ``CurrentUser`` is built from ``DEV_USER_*`` settings (plus optional extra
+  ``DEV_USER_MEMBERSHIPS`` so the membership switcher can be exercised
+  locally). This branch is gated strictly by ``settings.is_dev_auth`` and can
+  never activate when ``AUTH_MODE=prod``.
+- ``AUTH_MODE=prod``: the bearer token is validated against Entra ID's JWKS
+  and the user's group NAMES are obtained (directly from the claim, or via
+  Microsoft Graph for GUID claims / >200-group overage). Memberships are then
+  DERIVED from the group-name convention (see services/membership_service.py)
+  — there is no mapping table and no local user directory; AD group
+  membership is the sole source of truth, re-resolved on every request.
+
+Membership switching: a user may hold several (role, tenant) memberships.
+The active one is chosen per request via the ``X-Active-Role`` /
+``X-Active-Tenant`` headers and is always validated against the derived
+membership set — switching selects among what AD grants, never beyond it.
+With no headers, the highest-privilege membership is the default.
 """
 from __future__ import annotations
 
-from typing import Iterable, Optional
+from typing import Iterable, List, Optional
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.auth.models import CurrentUser
-from app.auth.oidc import TokenValidationError, validate_token
+from app.auth.models import CurrentUser, Membership
+from app.auth.oidc import (
+    GraphLookupError,
+    TokenValidationError,
+    get_group_names,
+    validate_token,
+)
 from app.config import settings
-from app.services.group_resolver_service import GroupResolverService
+from app.services.membership_service import (
+    membership_service,
+    select_active_membership,
+)
 
 _bearer = HTTPBearer(auto_error=False)
 
-_group_resolver = GroupResolverService()
+ACTIVE_ROLE_HEADER = "x-active-role"
+ACTIVE_TENANT_HEADER = "x-active-tenant"
 
-NO_GROUP_MAPPING_DETAIL = (
-    "No group mapping found. Contact your platform administrator."
+NO_MEMBERSHIP_DETAIL = (
+    "None of your AD groups match the platform's group-name convention. "
+    "Ask your administrator to add you to the appropriate platform group."
 )
 
 
-def _dev_current_user() -> CurrentUser:
+def _dev_memberships() -> List[Membership]:
+    """Build the synthetic dev user's membership set from DEV_USER_* vars."""
     tenant_id = settings.DEV_USER_TENANT_ID
-    # PlatformAdmin and MRM are platform-wide roles — neither is scoped to a
-    # single tenant, matching how their GroupMapping entries have tenantId=None.
+    # PlatformAdmin and MRM are platform-wide roles — never tenant-scoped.
     if settings.DEV_USER_ROLE in {"PlatformAdmin", "MRM"}:
         tenant_id = None
-    return CurrentUser(
-        userId=settings.DEV_USER_ID,
-        email=settings.DEV_USER_EMAIL,
-        name=settings.DEV_USER_NAME,
-        role=settings.DEV_USER_ROLE,
-        tenantId=tenant_id,
-        resolvedFromGroupId="dev-mode-synthetic",
-        accessToken=None,
+    memberships = [
+        Membership(
+            role=settings.DEV_USER_ROLE,
+            tenantId=tenant_id,
+            groupName="dev-mode-synthetic",
+        )
+    ]
+    for entry in settings.DEV_USER_MEMBERSHIPS.split(","):
+        entry = entry.strip()
+        if not entry:
+            continue
+        role, _, tenant = entry.partition(":")
+        extra = Membership(
+            role=role.strip(),
+            tenantId=tenant.strip() or None,
+            groupName="dev-mode-synthetic",
+        )
+        if not any(m.matches(extra.role, extra.tenantId) for m in memberships):
+            memberships.append(extra)
+    return memberships
+
+
+def _build_user(
+    request: Request,
+    *,
+    user_id: str,
+    email: str,
+    name: str,
+    memberships: List[Membership],
+    access_token: Optional[str],
+) -> CurrentUser:
+    """Select the active membership (headers) and assemble the CurrentUser."""
+    requested_role = request.headers.get(ACTIVE_ROLE_HEADER)
+    requested_tenant = request.headers.get(ACTIVE_TENANT_HEADER)
+    active = select_active_membership(memberships, requested_role, requested_tenant)
+    if active is None:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "The requested active role/tenant is not among your "
+                "memberships."
+            ),
+        )
+    user = CurrentUser(
+        userId=user_id,
+        email=email,
+        name=name,
+        role=active.role,
+        tenantId=active.tenantId,
+        memberships=memberships,
+        resolvedFromGroupId=active.groupName,
+        accessToken=access_token,
     )
+    request.state.current_user = user
+    return user
 
 
 async def get_current_user(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
 ) -> CurrentUser:
-    # ── Dev mode: synthetic user, no JWT / DynamoDB involved ────────────────
+    # ── Dev mode: synthetic user, no JWT / Graph involved ───────────────────
     if settings.is_dev_auth:
-        user = _dev_current_user()
-        request.state.current_user = user
-        return user
+        return _build_user(
+            request,
+            user_id=settings.DEV_USER_ID,
+            email=settings.DEV_USER_EMAIL,
+            name=settings.DEV_USER_NAME,
+            memberships=_dev_memberships(),
+            access_token=None,
+        )
 
-    # ── Prod mode: real Entra ID JWT validation + group resolution ─────────
+    # ── Prod mode: Entra JWT validation + convention-based membership ──────
     if credentials is None or not credentials.credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -87,28 +153,33 @@ async def get_current_user(
             detail="Token is missing a subject/object identifier.",
         )
 
-    resolved = _group_resolver.resolve(payload.groups)
-    if resolved is None:
+    try:
+        group_names = get_group_names(payload)
+    except GraphLookupError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Could not resolve group membership via Microsoft Graph. {exc}",
+        ) from exc
+
+    memberships = membership_service.memberships_from_group_names(group_names)
+    if not memberships:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=NO_GROUP_MAPPING_DETAIL,
+            detail=NO_MEMBERSHIP_DETAIL,
         )
 
-    user = CurrentUser(
-        userId=payload.user_id,
+    return _build_user(
+        request,
+        user_id=payload.user_id,
         email=payload.user_email or "",
         name=payload.name or payload.user_email or payload.user_id,
-        role=resolved.role,
-        tenantId=resolved.tenantId,
-        resolvedFromGroupId=resolved.groupId,
-        accessToken=token,
+        memberships=memberships,
+        access_token=token,
     )
-    request.state.current_user = user
-    return user
 
 
 def require_role(*allowed_roles: str):
-    """Return a dependency that 403s unless the current user has one of
+    """Return a dependency that 403s unless the ACTIVE role is one of
     ``allowed_roles``. PlatformAdmin is always implicitly allowed."""
 
     allowed = set(allowed_roles) | {"PlatformAdmin"}

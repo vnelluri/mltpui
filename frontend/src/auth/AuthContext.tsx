@@ -15,7 +15,7 @@ import {
   InteractionRequiredAuthError,
 } from '@azure/msal-browser';
 import { msalConfig, loginRequest, apiTokenRequest, DEMO_MODE } from './msalConfig';
-import { setTokenProvider } from '../api/client';
+import { setTokenProvider, getActiveMembership, setActiveMembership } from '../api/client';
 import { authApi } from '../api/auth';
 import type { CurrentUser, Role } from '../types/platform';
 import { parseTenantRole } from './roles';
@@ -103,6 +103,21 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       setStatus('authenticated');
     } catch (err) {
       if (axios.isAxiosError(err) && err.response?.status === 403) {
+        // A stale stored role/tenant selection (e.g. a membership revoked in
+        // AD) 403s every request — clear it and retry once with the default
+        // membership before concluding the user has no access at all.
+        if (getActiveMembership()) {
+          setActiveMembership(null);
+          try {
+            const me = await authApi.me();
+            setUser(me);
+            setError(null);
+            setStatus('authenticated');
+            return;
+          } catch {
+            // Fall through to no-access below.
+          }
+        }
         setStatus('no-access');
         setUser(null);
         return;
@@ -184,6 +199,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(async () => {
     localStorage.removeItem(DEMO_AUTH_KEY);
+    setActiveMembership(null); // never carry a role/tenant selection across users
     setUser(null);
     setGroups([]);
     setStatus('unauthenticated');

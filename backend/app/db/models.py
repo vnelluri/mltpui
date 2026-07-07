@@ -125,15 +125,6 @@ class Tenant(BaseModel):
     )
 
 
-class GroupMapping(BaseModel):
-    groupId: str
-    role: str
-    tenantId: Optional[str] = None
-    description: Optional[str] = None
-    createdAt: str = Field(default_factory=utcnow_iso)
-    createdBy: Optional[str] = None
-
-
 class TrainingJob(BaseModel):
     jobId: str
     tenantId: str
@@ -312,20 +303,6 @@ class Keys:
     @staticmethod
     def tenant_gsi(status: str, tenant_id: str) -> Dict[str, str]:
         return {"GSI1PK": f"TENANT_STATUS#{status}", "GSI1SK": f"TENANT#{tenant_id}"}
-
-    # GroupMapping --------------------------------------------------------
-    @staticmethod
-    def group_mapping(group_id: str) -> Dict[str, str]:
-        return {"PK": f"GROUPMAPPING#{group_id}", "SK": f"GROUPMAPPING#{group_id}"}
-
-    @staticmethod
-    def group_mapping_gsi(tenant_id: Optional[str], role: str, group_id: str) -> Dict[str, str]:
-        return {
-            "GSI1PK": f"GM_TENANT#{tenant_id or 'PLATFORM'}",
-            "GSI1SK": f"GROUPMAPPING#{group_id}",
-            "GSI2PK": f"GM_ROLE#{role}",
-            "GSI2SK": f"GROUPMAPPING#{group_id}",
-        }
 
     # TrainingJob ---------------------------------------------------------
     @staticmethod

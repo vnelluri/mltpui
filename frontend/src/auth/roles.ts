@@ -18,7 +18,7 @@ export const ROLE_LABELS: Record<Role, string> = {
 };
 
 export const ROLE_DESCRIPTIONS: Record<Role, string> = {
-  PlatformAdmin: 'Manage all tenants, users, and group mappings across the platform.',
+  PlatformAdmin: 'Manage all tenants and platform settings across the platform.',
   TenantAdmin: "Manage your tenant's users, jobs, and settings.",
   DataScientist: 'Submit jobs, run experiments, and register models.',
   MRM: 'Read-only governance review across all tenants.',

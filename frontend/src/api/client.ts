@@ -18,6 +18,39 @@ export function setTokenProvider(provider: TokenProvider | null): void {
   tokenProvider = provider;
 }
 
+// ── Active membership (role/tenant switching) ────────────────────────────────
+// A user may hold several (role, tenant) memberships derived from their AD
+// groups. The chosen one is persisted here and sent as headers on every
+// request; the backend validates it against the user's memberships each time
+// — selecting is possible, elevating is not.
+const ACTIVE_ROLE_KEY = 'mlplatform.activeRole';
+const ACTIVE_TENANT_KEY = 'mlplatform.activeTenant';
+
+export interface ActiveMembership {
+  role: string;
+  tenantId: string | null;
+}
+
+export function getActiveMembership(): ActiveMembership | null {
+  const role = localStorage.getItem(ACTIVE_ROLE_KEY);
+  if (!role) return null;
+  return { role, tenantId: localStorage.getItem(ACTIVE_TENANT_KEY) || null };
+}
+
+export function setActiveMembership(selection: ActiveMembership | null): void {
+  if (!selection) {
+    localStorage.removeItem(ACTIVE_ROLE_KEY);
+    localStorage.removeItem(ACTIVE_TENANT_KEY);
+    return;
+  }
+  localStorage.setItem(ACTIVE_ROLE_KEY, selection.role);
+  if (selection.tenantId) {
+    localStorage.setItem(ACTIVE_TENANT_KEY, selection.tenantId);
+  } else {
+    localStorage.removeItem(ACTIVE_TENANT_KEY);
+  }
+}
+
 export const apiClient: AxiosInstance = axios.create({
   baseURL: API_BASE_URL,
   timeout: 30000,
@@ -27,13 +60,18 @@ export const apiClient: AxiosInstance = axios.create({
 });
 
 apiClient.interceptors.request.use(async (config: InternalAxiosRequestConfig) => {
+  const headers = AxiosHeaders.from(config.headers);
+  const active = getActiveMembership();
+  if (active) {
+    headers.set('X-Active-Role', active.role);
+    if (active.tenantId) headers.set('X-Active-Tenant', active.tenantId);
+  }
+  config.headers = headers;
   if (tokenProvider) {
     try {
       const token = await tokenProvider();
       if (token) {
-        const headers = AxiosHeaders.from(config.headers);
         headers.set('Authorization', `Bearer ${token}`);
-        config.headers = headers;
       }
     } catch {
       // If token acquisition fails we still send the request; the backend will

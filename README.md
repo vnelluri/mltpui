@@ -9,8 +9,10 @@ tenancy and roles derived entirely from **Azure Entra ID** group membership.
 
 - **Backend:** Python 3.12 · FastAPI (async) · DynamoDB single-table design (boto3)
 - **Frontend:** React 18 · TypeScript · Vite · Tailwind CSS
-- **Auth:** Azure Entra ID (OIDC / OAuth2 PKCE); role + tenant resolved from the
-  `groups` claim against a `GroupMapping` table — never manually assigned
+- **Auth:** Azure Entra ID (OIDC / OAuth2 PKCE); role + tenant **derived from
+  security-group names** (`myapp-{tenant}-{role}` convention) — nothing to
+  administer in the app, and users with several groups can switch role/tenant
+  from the topbar
 - **Data:** Snowflake via OAuth token-exchange (per-user tokens, KMS-encrypted)
 - **Compute:** EMR Serverless / SageMaker Training (launched from the portal)
 - **Deploy target:** AWS ECS (Fargate) — no Lambda, no Step Functions
@@ -96,10 +98,13 @@ Local development bypasses real identity providers entirely.
 
 - **`AUTH_MODE=dev` (backend):** skips JWT validation. `get_current_user`
   synthesizes a `CurrentUser` from `DEV_USER_ID`, `DEV_USER_EMAIL`,
-  `DEV_USER_NAME`, `DEV_USER_ROLE`, and `DEV_USER_TENANT_ID`. No DynamoDB
-  `GroupMapping` lookup is performed — the synthetic user is treated as
-  pre-resolved. This bypass is gated strictly on `AUTH_MODE == "dev"` and never
-  activates in prod.
+  `DEV_USER_NAME`, `DEV_USER_ROLE`, and `DEV_USER_TENANT_ID` — no group-name
+  resolution is performed. Optionally set `DEV_USER_MEMBERSHIPS` (comma-
+  separated `Role:tenantId` pairs, e.g.
+  `DataScientist:tenant-fraud-detection,TenantAdmin:tenant-risk-analytics`)
+  to give the dev user extra memberships and exercise the topbar role/tenant
+  switcher locally. This bypass is gated strictly on `AUTH_MODE == "dev"` and
+  never activates in prod.
 - **`VITE_DEMO_MODE=true` (frontend):** the login page shows a **role-selector
   dropdown** instead of the Microsoft SSO button. The selector is *purely
   visual* — it sets a `localStorage` key used for styling only. The authoritative
@@ -185,33 +190,56 @@ driven by `DEV_USER_ROLE`.
 
 ## Entra ID App Registration setup (production only)
 
-Not needed locally. For production, tenancy and role are derived from the Entra
-`groups` claim — there are **no App Roles**.
+Not needed locally. For production, tenancy and role are **derived from Entra
+security-group NAMES** following a naming convention — there are no App Roles
+and no mapping table to administer. Access is governed entirely by AD group
+membership, which your IGA process already reviews and recertifies.
+
+**The naming convention** (configurable — see `GROUP_NAME_*` env vars):
+
+| Group name | Grants |
+|---|---|
+| `myapp-platform-admin` | PlatformAdmin (all tenants) |
+| `myapp-platform-mrm` | MRM (read across all tenants) |
+| `myapp-{tenantId}-tenantadmin` | TenantAdmin of that tenant |
+| `myapp-{tenantId}-datascientist` | DataScientist in that tenant |
+
+A group naming a tenant that doesn't exist as a Tenant record grants nothing.
+
+> **Security precondition:** with name-based resolution, the group name IS
+> the access grant. Creation of groups matching the convention MUST be
+> reserved to your governed provisioning (IGA) process — confirm this with
+> whoever owns AD group naming before going live.
+
+Setup steps:
 
 1. **Register the API application** in Entra ID.
 2. **Expose an API** with two scopes: `ml-platform.read` and `ml-platform.write`.
    Use the Application ID URI `api://ml-training-platform` (matches
    `ENTRA_AUDIENCE`).
 3. **Token configuration → optional claims** (ID + access token): `email`,
-   `given_name`, `family_name`, `oid`, `tid`, and **`groups`** (critical — this
-   is the source of truth for role/tenant).
-4. **Token configuration → Groups claim:** enable **Security groups**.
-5. **Group overage:** the token includes at most **200 groups**. If a user
-   belongs to more, Entra emits a `_claim_names`/`_claim_sources` overage
-   pointer instead; `oidc.py` handles this by calling the Microsoft Graph API to
-   fetch the user's group memberships.
-6. **Map groups to roles/tenants** after deploy — via `POST /group-mappings` or
-   the **Group Mappings** page in the UI (PlatformAdmin). Create Entra security
-   groups such as `ML-PlatformAdmins`, `ML-RiskAnalytics-DataScientists`,
-   `ML-FraudDetection-TenantAdmins`, and add users to them. To find a group's
-   Object ID: **Azure Portal → Entra ID → Groups → select group → Overview →
-   Object ID**.
+   `given_name`, `family_name`, `oid`, `tid`, and **`groups`**.
+4. **Token configuration → Groups claim:** enable **Security groups**. If your
+   groups are synced from on-prem AD, prefer emitting the claim as
+   **sAMAccountName** — the token then carries names directly and no Graph
+   call is needed at login. Cloud-only groups emit Object IDs; the backend
+   resolves their names via Microsoft Graph (`directoryObjects/getByIds`,
+   cached ~15 min).
+5. **Microsoft Graph access** (needed for GUID claims and for users in >200
+   groups, where Entra emits an overage pointer instead of a `groups` claim):
+   a **client secret** on the app registration (`ENTRA_CLIENT_SECRET`) and
+   the **GroupMember.Read.All** application permission with admin consent.
+6. **Create the AD groups** per the convention and add users to them. That's
+   the entire onboarding flow — there is nothing to configure in the app.
 
 When a user's group membership changes in Entra, their access changes on their
-**next login** — no application change required. If a user's groups map to
-multiple roles, the highest privilege wins (`PlatformAdmin > MRM > TenantAdmin >
-DataScientist`). If no mapping is found, the API returns **403** and the UI shows
-a "No Access" page.
+**next login** — no application change required. A user in several
+convention groups holds **all** of those memberships and can switch role/
+tenant from the topbar; the default is the highest privilege (`PlatformAdmin >
+MRM > TenantAdmin > DataScientist`). Switching is validated server-side on
+every request against the freshly derived memberships — it can never grant
+more than AD does. If no group matches the convention, the API returns
+**403** and the UI shows a "No Access" page.
 
 ---
 
@@ -269,7 +297,14 @@ ARN only, TTL-bound, deleted after the job) — never as plaintext env vars.
       from `EMR_SERVERLESS_APPLICATION_ID`.
 - [ ] Create the DynamoDB table in real AWS (CloudFormation below, or
       `create_tables.py` with `DYNAMODB_ENDPOINT_URL` unset).
-- [ ] Create group mappings via the Group Mappings page or `POST /group-mappings`.
+- [ ] Create Entra security groups per the naming convention
+      (`myapp-platform-admin`, `myapp-{tenantId}-datascientist`, …) and add
+      users — no in-app identity configuration exists. Set `GROUP_NAME_PATTERN`
+      / `GROUP_NAME_PLATFORM_ADMIN` / `GROUP_NAME_MRM` if your firm's naming
+      standard differs from the default.
+- [ ] Confirm with your IGA/AD owners that creation of convention-matching
+      group names is restricted to the governed process (the name IS the
+      access grant).
 - [ ] Add users to Entra security groups to grant platform access.
 
 ---
@@ -366,6 +401,7 @@ target-group **placeholders** in the JSON files under `infrastructure/ecs/`.
 |---|---|---|---|
 | `ENTRA_TENANT_ID` | Entra directory (tenant) ID | *(blank)* | `11111111-2222-3333-4444-555555555555` |
 | `ENTRA_CLIENT_ID` | App registration client ID | *(blank)* | `66666666-7777-8888-9999-000000000000` |
+| `ENTRA_CLIENT_SECRET` | Client secret for Graph group-overage lookups (Secrets Manager) | *(blank)* | *(Secrets Manager)* |
 | `ENTRA_AUDIENCE` | Expected JWT audience | `api://ml-training-platform` | `api://ml-training-platform` |
 | `AUTH_MODE` | `dev` bypass or `prod` JWT validation | `dev` | `prod` |
 | `DEV_USER_ID` | Synthetic user id (dev only) | `dev-user-001` | *(unset)* |
@@ -373,6 +409,10 @@ target-group **placeholders** in the JSON files under `infrastructure/ecs/`.
 | `DEV_USER_NAME` | Synthetic user name (dev only) | `Dev User` | *(unset)* |
 | `DEV_USER_ROLE` | Synthetic user role (dev only) | `PlatformAdmin` | *(unset)* |
 | `DEV_USER_TENANT_ID` | Synthetic user tenant (dev only) | `tenant-risk-analytics` | *(unset)* |
+| `DEV_USER_MEMBERSHIPS` | Extra `Role:tenantId` pairs for the dev user (switcher demo) | *(blank)* | *(unset)* |
+| `GROUP_NAME_PATTERN` | Regex (named captures `tenant`, `role`) parsing tenant-scoped group names | `^myapp-(?P<tenant>…)-(?P<role>…)$` | *(firm's standard)* |
+| `GROUP_NAME_PLATFORM_ADMIN` | Group name granting PlatformAdmin | `myapp-platform-admin` | *(firm's standard)* |
+| `GROUP_NAME_MRM` | Group name granting MRM | `myapp-platform-mrm` | *(firm's standard)* |
 | `CORS_ALLOWED_ORIGINS` | Allowed browser origins (JSON array) | `["http://localhost:3000"]` | `["https://ml.truist.example"]` |
 | `AWS_REGION` | AWS region | `us-east-1` | `us-east-1` |
 | `AWS_ACCESS_KEY_ID` | AWS key (blank → instance profile) | `test` | *(blank / instance profile)* |
@@ -438,6 +478,7 @@ curl -s -X POST http://localhost:8000/jobs \
   -H "Content-Type: application/json" \
   -d '{
         "name": "pd-model-nightly",
+        "tenantId": "tenant-risk-analytics",
         "computeType": "emr_serverless",
         "framework": "xgboost",
         "entryPointScript": "s3://ml-platform-artifacts/scripts/train.py",
@@ -458,6 +499,7 @@ curl -s -X POST http://localhost:8000/models \
   -H "Content-Type: application/json" \
   -d '{
         "name": "probability-of-default",
+        "tenantId": "tenant-risk-analytics",
         "framework": "xgboost",
         "artifactUri": "s3://ml-platform-artifacts/models/pd/1/",
         "description": "PD model v1 from nightly run",
@@ -471,7 +513,12 @@ curl -s -X POST http://localhost:8000/models \
 # Create a review for a model version
 REVIEW_ID=$(curl -s -X POST http://localhost:8000/governance/reviews \
   -H "Content-Type: application/json" \
-  -d '{ "modelId": "probability-of-default", "version": 1 }' | jq -r '.reviewId')
+  -d '{
+        "modelId": "<modelId from the registration response>",
+        "modelName": "probability-of-default",
+        "modelVersion": 1,
+        "tenantId": "tenant-risk-analytics"
+      }' | jq -r '.reviewId')
 
 # Submit the decision
 curl -s -X PUT "http://localhost:8000/governance/reviews/${REVIEW_ID}" \

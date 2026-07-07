@@ -24,7 +24,6 @@ from app.db.models import (  # noqa: E402
     ExperimentRun,
     FeatureView,
     GovernanceReview,
-    GroupMapping,
     JobStatus,
     ModelStage,
     ModelVersion,
@@ -41,7 +40,6 @@ from app.db.repositories.audit_repo import AuditRepository  # noqa: E402
 from app.db.repositories.experiment_repo import ExperimentRepository  # noqa: E402
 from app.db.repositories.feature_view_repo import FeatureViewRepository  # noqa: E402
 from app.db.repositories.governance_repo import GovernanceRepository  # noqa: E402
-from app.db.repositories.group_mapping_repo import GroupMappingRepository  # noqa: E402
 from app.db.repositories.job_repo import JobRepository  # noqa: E402
 from app.db.repositories.model_repo import ModelRepository  # noqa: E402
 from app.db.repositories.tenant_repo import TenantRepository  # noqa: E402
@@ -50,7 +48,6 @@ RNG = random.Random(42)
 
 created_counts = {
     "tenants": 0,
-    "groupMappings": 0,
     "jobs": 0,
     "experiments": 0,
     "runs": 0,
@@ -119,69 +116,12 @@ def seed_tenants(repo: TenantRepository) -> None:
         _try_create("tenants", repo.create, t)
 
 
-GROUP_PLATFORM_ADMIN = "aaaaaaaa-0001-0001-0001-000000000001"
-GROUP_MRM = "aaaaaaaa-0002-0001-0001-000000000002"
-GROUP_TENANTADMIN_RA = "aaaaaaaa-0003-0001-0001-000000000003"
-GROUP_TENANTADMIN_FD = "aaaaaaaa-0004-0001-0001-000000000004"
-GROUP_DATASCIENTIST_RA = "aaaaaaaa-0005-0001-0001-000000000005"
-GROUP_DATASCIENTIST_FD = "aaaaaaaa-0006-0001-0001-000000000006"
-
-
-def seed_group_mappings(repo: GroupMappingRepository) -> None:
-    mappings = [
-        GroupMapping(
-            groupId=GROUP_PLATFORM_ADMIN,
-            role="PlatformAdmin",
-            tenantId=None,
-            description="ML-PlatformAdmins",
-            createdBy="system-seed",
-        ),
-        GroupMapping(
-            groupId=GROUP_MRM,
-            role="MRM",
-            tenantId=None,
-            description="ML-ModelRiskManagement",
-            createdBy="system-seed",
-        ),
-        GroupMapping(
-            groupId=GROUP_TENANTADMIN_RA,
-            role="TenantAdmin",
-            tenantId="tenant-risk-analytics",
-            description="ML-RiskAnalytics-TenantAdmins",
-            createdBy="system-seed",
-        ),
-        GroupMapping(
-            groupId=GROUP_TENANTADMIN_FD,
-            role="TenantAdmin",
-            tenantId="tenant-fraud-detection",
-            description="ML-FraudDetection-TenantAdmins",
-            createdBy="system-seed",
-        ),
-        GroupMapping(
-            groupId=GROUP_DATASCIENTIST_RA,
-            role="DataScientist",
-            tenantId="tenant-risk-analytics",
-            description="ML-RiskAnalytics-DataScientists",
-            createdBy="system-seed",
-        ),
-        GroupMapping(
-            groupId=GROUP_DATASCIENTIST_FD,
-            role="DataScientist",
-            tenantId="tenant-fraud-detection",
-            description="ML-FraudDetection-DataScientists",
-            createdBy="system-seed",
-        ),
-    ]
-    for gm in mappings:
-        _try_create("groupMappings", repo.create, gm)
-
-
 # Well-known demo user IDs. There is no UserProfile/user directory table —
-# Entra ID + GroupMapping is the sole source of truth for identity, resolved
-# fresh on every request (see app/dependencies.py). These IDs exist here only
-# as attribution values (createdBy/userId/registeredBy/reviewedBy) on the
-# other seeded entities below, matching what each demo user's real Entra
-# login would resolve to via the group mappings seeded above.
+# role/tenant are DERIVED from Entra security-group NAMES on every request
+# (the myapp-{tenant}-{role} convention; see app/services/membership_service
+# .py), so there is nothing identity-related to seed. These IDs exist here
+# only as attribution values (createdBy/userId/registeredBy/reviewedBy) on
+# the other seeded entities below.
 USER_PLATFORM_ADMIN = "user-platformadmin-01"
 USER_MRM = "user-mrm-01"
 USER_TENANTADMIN_RA = "user-tenantadmin-ra-01"
@@ -435,7 +375,7 @@ def seed_audit_events(repo: AuditRepository) -> None:
     actions = [
         ("tenant.create", "Tenant", "tenant-risk-analytics", USER_PLATFORM_ADMIN, None),
         ("tenant.create", "Tenant", "tenant-fraud-detection", USER_PLATFORM_ADMIN, None),
-        ("group_mapping.create", "GroupMapping", GROUP_DATASCIENTIST_RA, USER_PLATFORM_ADMIN, None),
+        ("tenant.update", "Tenant", "tenant-risk-analytics", USER_PLATFORM_ADMIN, None),
         ("job.submit", "TrainingJob", "demo-job-01", USER_DS_RA_1, "tenant-risk-analytics"),
         ("job.submit", "TrainingJob", "demo-job-02", USER_DS_FD_1, "tenant-fraud-detection"),
         ("job.submit", "TrainingJob", "demo-job-03", USER_DS_RA_1, "tenant-risk-analytics"),
@@ -530,7 +470,6 @@ def seed_s3_objects() -> None:
 
 def main() -> None:
     tenant_repo = TenantRepository()
-    group_repo = GroupMappingRepository()
     job_repo = JobRepository()
     exp_repo = ExperimentRepository()
     model_repo = ModelRepository()
@@ -540,7 +479,6 @@ def main() -> None:
 
     print("Seeding demo data (idempotent — safe to re-run) ...")
     seed_tenants(tenant_repo)
-    seed_group_mappings(group_repo)
     seed_jobs(job_repo)
     best, all_runs = seed_experiments_and_runs(exp_repo)
     model_ids = seed_models(model_repo, best, all_runs)
@@ -558,9 +496,9 @@ def main() -> None:
         print(f"{key:<14}{created_counts[key]:>10}{skipped_counts[key]:>18}")
     print("\n✔ Demo data ready.")
     print(
-        "  Tenants:        Risk Analytics · Fraud Detection · Compliance\n"
-        "  Group mappings: 6 (see backend/scripts/seed_demo_data.py — identity/role/\n"
-        "                  tenant come from Entra + GroupMapping, no local user directory)"
+        "  Tenants: Risk Analytics · Fraud Detection · Compliance\n"
+        "  Identity: role/tenant derive from Entra group NAMES "
+        "(myapp-{tenant}-{role}) — nothing to seed."
     )
 
 

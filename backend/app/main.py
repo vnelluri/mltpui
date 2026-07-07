@@ -21,7 +21,6 @@ from app.routers import (
     experiments,
     feature_store,
     governance,
-    group_mappings,
     health,
     jobs,
     models,
@@ -73,5 +72,4 @@ app.include_router(governance.router)
 app.include_router(notebooks.router)
 app.include_router(s3.router)
 app.include_router(snowflake.router)
-app.include_router(group_mappings.router)
 app.include_router(audit.router)

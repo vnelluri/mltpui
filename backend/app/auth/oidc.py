@@ -7,6 +7,7 @@ synthetic user before any validation runs.
 """
 from __future__ import annotations
 
+import re
 import threading
 import time
 from typing import Any, Dict, Optional
@@ -125,6 +126,11 @@ def _claims_to_payload(claims: Dict[str, Any]) -> TokenPayload:
     groups = claims.get("groups") or []
     if not isinstance(groups, list):
         groups = [groups]
+    # Group overage: users in more than ~200 groups get no `groups` claim.
+    # Entra instead emits a `_claim_names`/`_claim_sources` pointer telling
+    # the API to fetch memberships from Microsoft Graph itself.
+    claim_names = claims.get("_claim_names") or {}
+    has_group_overage = isinstance(claim_names, dict) and "groups" in claim_names
     return TokenPayload(
         oid=claims.get("oid"),
         sub=claims.get("sub"),
@@ -135,5 +141,170 @@ def _claims_to_payload(claims: Dict[str, Any]) -> TokenPayload:
         aud=claims.get("aud"),
         iss=claims.get("iss"),
         groups=[str(g) for g in groups],
+        has_group_overage=has_group_overage,
         raw=claims,
     )
+
+
+# ── Microsoft Graph group-overage resolution ────────────────────────────────
+class GraphLookupError(Exception):
+    """Raised when group membership cannot be resolved via Microsoft Graph."""
+
+
+class _GraphTokenCache:
+    """Client-credentials token for Microsoft Graph, cached until expiry."""
+
+    def __init__(self) -> None:
+        self._token: Optional[str] = None
+        self._expires_at: float = 0.0
+        self._lock = threading.Lock()
+
+    def get(self) -> str:
+        now = time.time()
+        if self._token and now < self._expires_at - 60:
+            return self._token
+        with self._lock:
+            now = time.time()
+            if self._token and now < self._expires_at - 60:
+                return self._token
+            if not (
+                settings.ENTRA_TENANT_ID
+                and settings.ENTRA_CLIENT_ID
+                and settings.ENTRA_CLIENT_SECRET
+            ):
+                raise GraphLookupError(
+                    "Group overage requires ENTRA_CLIENT_SECRET (plus tenant/"
+                    "client IDs) so the API can query Microsoft Graph."
+                )
+            try:
+                with httpx.Client(timeout=10.0) as client:
+                    resp = client.post(
+                        f"https://login.microsoftonline.com/"
+                        f"{settings.ENTRA_TENANT_ID}/oauth2/v2.0/token",
+                        data={
+                            "grant_type": "client_credentials",
+                            "client_id": settings.ENTRA_CLIENT_ID,
+                            "client_secret": settings.ENTRA_CLIENT_SECRET,
+                            "scope": "https://graph.microsoft.com/.default",
+                        },
+                    )
+                    resp.raise_for_status()
+                    payload = resp.json()
+            except httpx.HTTPError as exc:
+                raise GraphLookupError(
+                    f"Could not acquire a Microsoft Graph token: {exc}"
+                ) from exc
+            self._token = payload["access_token"]
+            self._expires_at = now + int(payload.get("expires_in", 3600))
+            return self._token
+
+
+_graph_token_cache = _GraphTokenCache()
+
+# Safety valve: 10 pages × 999 groups is far beyond any realistic membership.
+_GRAPH_MAX_PAGES = 10
+
+_GUID_RE = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+# Group names are stable enough to cache briefly; this keeps Graph off the
+# hot path for repeat requests. Process-local, refreshed every 15 minutes.
+_NAME_CACHE_TTL_SECONDS = 15 * 60
+_name_cache: Dict[str, tuple[float, str]] = {}
+_name_cache_lock = threading.Lock()
+
+
+def fetch_group_names_via_graph(user_oid: str) -> list[str]:
+    """Fetch a user's transitive group NAMES from Microsoft Graph.
+
+    Used when the token carries a group-overage pointer instead of a
+    ``groups`` claim. Requires the GroupMember.Read.All application
+    permission (admin-consented) on the app registration.
+    """
+    token = _graph_token_cache.get()
+    url = (
+        f"https://graph.microsoft.com/v1.0/users/{user_oid}"
+        f"/transitiveMemberOf/microsoft.graph.group"
+        f"?$select=id,displayName&$top=999"
+    )
+    names: list[str] = []
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            for _ in range(_GRAPH_MAX_PAGES):
+                resp = client.get(url, headers={"Authorization": f"Bearer {token}"})
+                resp.raise_for_status()
+                payload = resp.json()
+                for item in payload.get("value", []):
+                    if item.get("displayName"):
+                        names.append(str(item["displayName"]))
+                url = payload.get("@odata.nextLink")
+                if not url:
+                    break
+    except httpx.HTTPError as exc:
+        raise GraphLookupError(
+            f"Microsoft Graph group lookup failed for user {user_oid}: {exc}"
+        ) from exc
+    return names
+
+
+def _names_for_group_ids(group_ids: list[str]) -> list[str]:
+    """Resolve group object IDs to display names via Graph ``getByIds``."""
+    now = time.time()
+    with _name_cache_lock:
+        cached = {
+            gid: name
+            for gid, (fetched_at, name) in _name_cache.items()
+            if now - fetched_at < _NAME_CACHE_TTL_SECONDS
+        }
+    missing = [gid for gid in group_ids if gid not in cached]
+
+    if missing:
+        token = _graph_token_cache.get()
+        try:
+            with httpx.Client(timeout=15.0) as client:
+                # getByIds accepts up to 1000 ids per call.
+                for start in range(0, len(missing), 1000):
+                    resp = client.post(
+                        "https://graph.microsoft.com/v1.0/directoryObjects/getByIds",
+                        headers={"Authorization": f"Bearer {token}"},
+                        json={
+                            "ids": missing[start : start + 1000],
+                            "types": ["group"],
+                        },
+                    )
+                    resp.raise_for_status()
+                    for item in resp.json().get("value", []):
+                        gid, name = item.get("id"), item.get("displayName")
+                        if gid and name:
+                            cached[gid] = str(name)
+                            with _name_cache_lock:
+                                _name_cache[gid] = (now, str(name))
+        except httpx.HTTPError as exc:
+            raise GraphLookupError(
+                f"Microsoft Graph group-name lookup failed: {exc}"
+            ) from exc
+
+    return [cached[gid] for gid in group_ids if gid in cached]
+
+
+def get_group_names(payload: TokenPayload) -> list[str]:
+    """Return the group NAMES for a validated token, whatever the claim holds.
+
+    - Claim carries names (AD-synced groups emitting sAMAccountName): use
+      them directly — no Graph call.
+    - Claim carries object IDs (cloud-default): resolve names via Graph
+      ``getByIds`` (cached).
+    - No claim, overage pointer set (>200 groups): fetch transitive
+      memberships from Graph.
+    """
+    if payload.groups:
+        if all(_GUID_RE.match(g) for g in payload.groups):
+            return _names_for_group_ids(payload.groups)
+        return payload.groups
+    if payload.has_group_overage:
+        if not payload.user_id:
+            raise GraphLookupError("Token has a group overage but no user OID.")
+        return fetch_group_names_via_graph(payload.user_id)
+    return []

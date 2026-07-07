@@ -20,6 +20,10 @@ class TokenPayload(BaseModel):
     aud: Optional[str] = None
     iss: Optional[str] = None
     groups: List[str] = Field(default_factory=list)
+    # True when the token carries a `_claim_names` group-overage pointer
+    # instead of a `groups` claim (user in >200 groups) — resolved via
+    # Microsoft Graph in get_current_user.
+    has_group_overage: bool = False
     # Raw claims retained for /auth/token-info in dev.
     raw: dict = Field(default_factory=dict)
 
@@ -32,14 +36,37 @@ class TokenPayload(BaseModel):
         return self.email or self.preferred_username
 
 
+class Membership(BaseModel):
+    """One (role, tenant) pair derived from a convention-named AD group."""
+
+    role: str
+    tenantId: Optional[str] = None
+    # Display name from the Tenant record — enriched by /auth/me so the UI
+    # can show meaningful names (the group name only carries the tenant id).
+    tenantName: Optional[str] = None
+    # The group name that granted this membership (attribution/debugging).
+    groupName: Optional[str] = None
+
+    def matches(self, role: str, tenant_id: Optional[str]) -> bool:
+        return self.role == role and self.tenantId == (tenant_id or None)
+
+
 class CurrentUser(BaseModel):
-    """The authenticated principal for the current request."""
+    """The authenticated principal for the current request.
+
+    ``role``/``tenantId`` are the ACTIVE membership (what every downstream
+    check reads); ``memberships`` is everything the user's AD groups grant.
+    The active pair is selected per-request via the X-Active-Role /
+    X-Active-Tenant headers and always validated against ``memberships`` —
+    switching can select among grants, never elevate beyond them.
+    """
 
     userId: str
     email: str
     name: str
     role: str
     tenantId: Optional[str] = None
+    memberships: List[Membership] = Field(default_factory=list)
     resolvedFromGroupId: Optional[str] = None
     # The user's raw Entra access token (prod) — used for Snowflake token
     # exchange. Never persisted or logged.

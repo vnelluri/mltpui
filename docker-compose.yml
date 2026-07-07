@@ -104,6 +104,7 @@ services:
       DEV_USER_NAME: ${DEV_USER_NAME:-Dev User}
       DEV_USER_ROLE: ${DEV_USER_ROLE:-PlatformAdmin}
       DEV_USER_TENANT_ID: ${DEV_USER_TENANT_ID:-tenant-risk-analytics}
+      DEV_USER_MEMBERSHIPS: ${DEV_USER_MEMBERSHIPS:-}
       # ── Mock external integrations ──
       SNOWFLAKE_MOCK_MODE: "true"
       EMR_MOCK_MODE: "true"

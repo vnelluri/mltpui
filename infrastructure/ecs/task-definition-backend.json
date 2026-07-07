@@ -26,6 +26,9 @@
       ],
       "environment": [
         { "name": "AUTH_MODE", "value": "prod" },
+        { "name": "GROUP_NAME_PATTERN", "value": "^myapp-(?P<tenant>[a-z0-9][a-z0-9-]*?)-(?P<role>datascientist|tenantadmin)$" },
+        { "name": "GROUP_NAME_PLATFORM_ADMIN", "value": "myapp-platform-admin" },
+        { "name": "GROUP_NAME_MRM", "value": "myapp-platform-mrm" },
         { "name": "AWS_REGION", "value": "us-east-1" },
         { "name": "DYNAMODB_TABLE_NAME", "value": "ml-platform" },
         { "name": "EMR_MOCK_MODE", "value": "false" },
@@ -41,6 +44,7 @@
       "secrets": [
         { "name": "ENTRA_TENANT_ID", "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/ml-platform/entra/tenant-id" },
         { "name": "ENTRA_CLIENT_ID", "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/ml-platform/entra/client-id" },
+        { "name": "ENTRA_CLIENT_SECRET", "valueFrom": "arn:aws:secretsmanager:us-east-1:ACCOUNT_ID:secret:ml-platform/entra/client-secret" },
         { "name": "ENTRA_AUDIENCE", "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/ml-platform/entra/audience" },
         { "name": "CORS_ALLOWED_ORIGINS", "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/ml-platform/cors/allowed-origins" },
         { "name": "EMR_STUDIO_ID", "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/ml-platform/emr/studio-id" },
