@@ -157,8 +157,7 @@ open http://localhost:8000/docs
 # Reset demo data to a clean seeded state
 docker compose exec backend python scripts/reset_local_db.py
 
-# Backend unit tests / frontend type-check
-docker compose exec backend pytest
+# Frontend type-check (backend test suite: planned — not yet in the repo)
 docker compose exec frontend npm run type-check
 
 # Stop (data persists in the localstack-data volume)
@@ -311,6 +310,15 @@ ARN only, TTL-bound, deleted after the job) — never as plaintext env vars.
 - [ ] Confirm with your IGA/AD owners that creation of convention-matching
       group names is restricted to the governed process (the name IS the
       access grant).
+- [ ] **Account split (optional):** to run control plane and dataplane in
+      separate AWS accounts, deploy tmt-dataplane in the dataplane account
+      and set `DATAPLANE_RUNTIME_ROLE_ARN` to its runtime-role output — the
+      backend then assumes it with `tenantId` session tags (ABAC) for every
+      EMR/job-secret call. Cross-account S3 and KMS access come from the
+      bucket/key policies tmt-dataplane creates (pass the backend task role
+      ARN in its tfvars); per-tenant KMS key ARNs reach the backend via the
+      provisioning write-back (`Tenant.kmsKeyArn`). Blank = single-account
+      mode, unchanged.
 - [ ] Add users to Entra security groups to grant platform access.
 
 ---
@@ -435,7 +443,9 @@ target-group **placeholders** in the JSON files under `infrastructure/ecs/`.
 | `SAGEMAKER_DOMAIN_ID` | SageMaker Studio domain | *(blank)* | `d-abc123` |
 | `SAGEMAKER_TRAINING_IMAGE` | Training container image for SageMaker jobs | *(blank)* | `…dkr.ecr…/training:latest` |
 | `TENANT_PROVISIONING_MOCK_MODE` | Self-provision mock tenant resources (local) vs EventBridge handoff to the IaC pipeline (prod) | `true` | `false` |
-| `TENANT_PROVISIONING_EVENT_BUS` | EventBridge bus for provisioning requests | `default` | `default` |
+| `TENANT_PROVISIONING_EVENT_BUS` | EventBridge bus for provisioning requests | `default` | *(dataplane bus ARN)* |
+| `DATAPLANE_RUNTIME_ROLE_ARN` | Dataplane runtime role for the account split (blank = single-account) | *(blank)* | `arn:aws:iam::<dataplane>:role/ml-platform-dataplane-runtime` |
+| `STS_ENDPOINT_URL` | STS endpoint (LocalStack only) | *(blank)* | *(blank)* |
 | `SAGEMAKER_MOCK_MODE` | Return fake SageMaker jobs/URLs | `true` | `false` |
 | `SNOWFLAKE_ACCOUNT` | Snowflake account identifier | *(blank)* | `myorg-myaccount` |
 | `SNOWFLAKE_OAUTH_INTEGRATION_NAME` | Snowflake security integration | `ml_platform_oauth` | `ml_platform_oauth` |
@@ -469,10 +479,19 @@ injects the synthetic user. Against production, add
 curl -s -X POST http://localhost:8000/tenants \
   -H "Content-Type: application/json" \
   -d '{
+        "tenantId": "wholesale-credit",
         "name": "Wholesale Credit",
         "allowedFrameworks": ["pytorch", "xgboost"],
         "computeQuotaVcpuHours": 5000
       }' | jq
+```
+
+`tenantId` is the key: it is the slug that appears in the Entra group names
+(`myapp-wholesale-credit-datascientist`), the S3 prefix, and the dataplane
+resource names — chosen once at creation, never changeable. The `name` is the
+display label it maps to, editable any time.
+
+```bash
 ```
 
 **List jobs** (scoped automatically to the caller's tenant unless PlatformAdmin)
@@ -566,7 +585,7 @@ Explore every endpoint interactively at **http://localhost:8000/docs**.
 
 ---
 
-## Repository layout (infrastructure & tooling)
+## Repository layout
 
 ```
 .
@@ -577,20 +596,25 @@ Explore every endpoint interactively at **http://localhost:8000/docs**.
 │   ├── dev.sh                      # one-command local bring-up
 │   └── test-api.sh                 # curl+jq smoke tests for the backend
 ├── backend/
-│   └── Dockerfile                  # base → dev → prod (non-root, healthcheck)
+│   ├── Dockerfile                  # base → dev → prod (non-root, healthcheck)
+│   ├── app/                        # FastAPI application (routers/services/repositories)
+│   ├── scripts/                    # table creation, demo seed, local KMS setup
+│   └── iac/                        # Terraform module: backend ECS service + IAM
 ├── frontend/
 │   ├── Dockerfile                  # base → dev → build → prod (nginx)
-│   └── nginx.conf                  # SPA fallback, gzip, asset caching
+│   ├── nginx.conf                  # SPA fallback, gzip, asset caching
+│   ├── src/                        # React application
+│   └── iac/                        # Terraform module: frontend ECS service
 └── infrastructure/
     ├── dynamodb/
-    │   └── tables.json             # CloudFormation: single table + 3 overloaded GSIs + TTL
-    └── ecs/
-        ├── task-definition-backend.json
-        ├── task-definition-frontend.json
-        ├── ecs-service-backend.json
-        └── ecs-service-frontend.json
+    │   └── tables.json             # CloudFormation: single table + GSIs + TTL
+    └── ecs/                        # reference task/service JSON (superseded by
+        └── …                       # the backend/iac + frontend/iac modules)
 ```
 
-The `backend/app/**`, `backend/scripts/**`, `backend/requirements.txt`, and
-`frontend/src/**` application sources are maintained alongside this
-infrastructure and are built/served by the Dockerfiles above.
+**Companion repository — `tmt-dataplane`:** per-tenant compute provisioning
+for the dataplane AWS account (EMR Serverless applications, tenant execution
+roles, KMS keys, the provisioning EventBridge bus + CodeBuild reconcile
+pipeline). Deployed by that account's own pipeline; this repo's backend talks
+to it via `TENANT_PROVISIONING_EVENT_BUS` and, in the account split,
+`DATAPLANE_RUNTIME_ROLE_ARN`.
