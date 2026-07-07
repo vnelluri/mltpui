@@ -216,6 +216,8 @@ class GovernanceReview(BaseModel):
     tenantId: str
     modelName: Optional[str] = None
     modelVersion: Optional[int] = None
+    # Who requested the review (DS/TenantAdmin) vs who decided it (MRM).
+    submittedBy: Optional[str] = None
     reviewedBy: Optional[str] = None
     decision: str = ReviewDecision.PENDING.value
     comments: Optional[str] = None
@@ -243,10 +245,30 @@ class NotebookSession(BaseModel):
     userId: str
     tenantId: Optional[str] = None
     sessionType: str
-    presignedUrl: str
+    # Returned ONCE in the launch response, never persisted — a presigned
+    # URL is a credential; the stored record is metadata only (see
+    # notebook_repo, which strips it on write).
+    presignedUrl: Optional[str] = None
     urlExpiresAt: str
     createdAt: str = Field(default_factory=utcnow_iso)
     status: str = "active"
+
+
+class RunToken(BaseModel):
+    """Machine identity for one training run — see services/run_token_service.
+
+    Only the SHA-256 hash of the opaque token is stored; the token itself
+    travels to the compute job via the per-job Secrets Manager secret and is
+    never persisted or returned by the API. Auto-expired by DynamoDB TTL.
+    """
+
+    tokenHash: str
+    jobId: str
+    experimentId: str
+    runId: str
+    tenantId: str
+    createdAt: str = Field(default_factory=utcnow_iso)
+    expiresAt: str
 
 
 class SnowflakeTokenCache(BaseModel):
@@ -400,6 +422,11 @@ class Keys:
     @staticmethod
     def snowflake_token(user_id: str) -> Dict[str, str]:
         return {"PK": f"SFTOKEN#{user_id}", "SK": f"SFTOKEN#{user_id}"}
+
+    # RunToken -------------------------------------------------------------
+    @staticmethod
+    def run_token(token_hash: str) -> Dict[str, str]:
+        return {"PK": f"RUNTOKEN#{token_hash}", "SK": f"RUNTOKEN#{token_hash}"}
 
     # FeatureView -----------------------------------------------------------
     @staticmethod

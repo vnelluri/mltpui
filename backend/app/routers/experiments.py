@@ -162,6 +162,40 @@ def _get_owned_run(experiment_id: str, run_id: str, user: CurrentUser) -> Experi
     return run
 
 
+_RUN_WRITER_ROLES = {"PlatformAdmin", "TenantAdmin", "DataScientist"}
+
+
+def _get_writable_run(experiment_id: str, run_id: str, user: CurrentUser) -> ExperimentRun:
+    """Authorize a metrics/params/tags write and return the run.
+
+    Two kinds of writers:
+    - Humans (DS/TenantAdmin/PlatformAdmin): normal tenant-scoped access.
+    - Machine principals (run tokens presented by training jobs): may write
+      to EXACTLY the run their token was minted for — nothing else.
+    """
+    if user.is_machine:
+        if user.machineExperimentId != experiment_id or user.machineRunId != run_id:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="This run token is scoped to a different run.",
+            )
+        run = _repo.get_run(experiment_id, run_id)
+        if run is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found.")
+        # Belt and braces: the token's tenant must match the run's.
+        enforce_tenant_access(user, run.tenantId)
+        return run
+    if user.role not in _RUN_WRITER_ROLES:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                "This action requires one of the following roles: "
+                "DataScientist, PlatformAdmin, TenantAdmin."
+            ),
+        )
+    return _get_owned_run(experiment_id, run_id, user)
+
+
 @router.get("/{experiment_id}/runs/{run_id}", response_model=ExperimentRun)
 async def get_run(
     experiment_id: str, run_id: str, user: CurrentUser = Depends(get_current_user)
@@ -169,14 +203,16 @@ async def get_run(
     return _get_owned_run(experiment_id, run_id, user)
 
 
+# The three run-update endpoints accept machine principals (run tokens) in
+# addition to human writers — this is the training job's "develop" loop.
 @router.put("/{experiment_id}/runs/{run_id}/metrics", response_model=ExperimentRun)
 async def log_metrics(
     experiment_id: str,
     run_id: str,
     body: MetricsUpdateRequest,
-    user: CurrentUser = Depends(require_role("TenantAdmin", "DataScientist")),
+    user: CurrentUser = Depends(get_current_user),
 ) -> ExperimentRun:
-    run = _get_owned_run(experiment_id, run_id, user)
+    run = _get_writable_run(experiment_id, run_id, user)
     run.metrics = {**run.metrics, **body.metrics}
     return _repo.update_run(run)
 
@@ -186,9 +222,9 @@ async def log_params(
     experiment_id: str,
     run_id: str,
     body: ParamsUpdateRequest,
-    user: CurrentUser = Depends(require_role("TenantAdmin", "DataScientist")),
+    user: CurrentUser = Depends(get_current_user),
 ) -> ExperimentRun:
-    run = _get_owned_run(experiment_id, run_id, user)
+    run = _get_writable_run(experiment_id, run_id, user)
     run.params = {**run.params, **body.params}
     return _repo.update_run(run)
 
@@ -198,8 +234,8 @@ async def set_tags(
     experiment_id: str,
     run_id: str,
     body: TagsUpdateRequest,
-    user: CurrentUser = Depends(require_role("TenantAdmin", "DataScientist")),
+    user: CurrentUser = Depends(get_current_user),
 ) -> ExperimentRun:
-    run = _get_owned_run(experiment_id, run_id, user)
+    run = _get_writable_run(experiment_id, run_id, user)
     run.tags = {**run.tags, **body.tags}
     return _repo.update_run(run)

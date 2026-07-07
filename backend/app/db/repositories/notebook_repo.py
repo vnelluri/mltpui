@@ -20,7 +20,9 @@ class NotebookRepository:
             **Keys.notebook_gsi(
                 session.userId, session.createdAt, session.sessionId
             ),
-            **session.model_dump(),
+            # A presigned URL is a credential — return it once in the launch
+            # response but never persist it; the record is metadata only.
+            **session.model_dump(exclude={"presignedUrl"}),
         }
         self.table.put_item(Item=clean_item(item))
         return session

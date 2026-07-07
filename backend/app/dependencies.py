@@ -27,7 +27,7 @@ from typing import Iterable, List, Optional
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.auth.models import CurrentUser, Membership
+from app.auth.models import MACHINE_ROLE, CurrentUser, Membership
 from app.auth.oidc import (
     GraphLookupError,
     TokenValidationError,
@@ -118,6 +118,35 @@ async def get_current_user(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
 ) -> CurrentUser:
+    # ── Machine principal: run tokens (mlrt_…) presented by training jobs ──
+    # Checked before the dev bypass so the narrow machine scoping is
+    # exercised identically in local dev and prod.
+    from app.services.run_token_service import RUN_TOKEN_PREFIX, run_token_service
+
+    if credentials and credentials.credentials.startswith(RUN_TOKEN_PREFIX):
+        record = run_token_service.resolve(credentials.credentials)
+        if record is None:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid or expired run token.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        user = CurrentUser(
+            userId=f"job:{record.jobId}",
+            email="",
+            name=f"training job {record.jobId}",
+            role=MACHINE_ROLE,
+            tenantId=record.tenantId,
+            memberships=[],
+            resolvedFromGroupId="run-token",
+            machineJobId=record.jobId,
+            machineExperimentId=record.experimentId,
+            machineRunId=record.runId,
+            accessToken=None,
+        )
+        request.state.current_user = user
+        return user
+
     # ── Dev mode: synthetic user, no JWT / Graph involved ───────────────────
     if settings.is_dev_auth:
         return _build_user(

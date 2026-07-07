@@ -64,7 +64,10 @@ async def list_reviews(
 async def create_review(
     body: ReviewCreateRequest,
     request: Request,
-    user: CurrentUser = Depends(require_role("MRM")),
+    # Submitting FOR review is the model owner's action (DS/TenantAdmin, in
+    # their own tenant); only the DECISION is MRM's (PUT below stays
+    # MRM-only). MRM may also open a review directly.
+    user: CurrentUser = Depends(require_role("TenantAdmin", "DataScientist", "MRM")),
 ) -> GovernanceReview:
     mv = _model_repo.get_by_model_id(body.modelId, body.modelVersion)
     if mv is None and body.tenantId:
@@ -73,22 +76,40 @@ async def create_review(
         mv = _model_repo.get_version(body.tenantId, body.modelName, body.modelVersion)
     if mv is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model version not found.")
+    enforce_tenant_access(user, mv.tenantId)
+
+    # Idempotency guard: one open review per model version. Re-submitting
+    # returns the existing pending review instead of stacking duplicates in
+    # the MRM queue.
+    existing = next(
+        (
+            r
+            for r in _repo.list_by_model(mv.modelId)
+            if r.decision == ReviewDecision.PENDING.value
+        ),
+        None,
+    )
+    if existing is not None:
+        return existing
+
     review = GovernanceReview(
         reviewId=str(uuid.uuid4()),
         modelId=mv.modelId,
         tenantId=mv.tenantId,
         modelName=mv.name,
         modelVersion=mv.version,
-        reviewedBy=user.userId,
+        submittedBy=user.userId,
+        reviewedBy=None,  # set by MRM when the decision is made
         decision=ReviewDecision.PENDING.value,
     )
     _repo.create(review)
     audit_service.record(
         user=user,
-        action="governance.review_create",
+        action="governance.review_submit",
         resource_type="GovernanceReview",
         resource_id=review.reviewId,
         tenant_id=mv.tenantId,
+        details={"model": f"{mv.name}/{mv.version}"},
         request=request,
     )
     return review
@@ -112,6 +133,11 @@ async def submit_decision(
     request: Request,
     user: CurrentUser = Depends(require_role("MRM")),
 ) -> GovernanceReview:
+    if body.decision not in {ReviewDecision.APPROVED.value, ReviewDecision.REJECTED.value}:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="decision must be 'approved' or 'rejected'.",
+        )
     review = _repo.get(review_id)
     if review is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Review not found.")

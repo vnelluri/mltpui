@@ -44,21 +44,23 @@ class NotebookService:
         return resp["AuthorizedUrl"]
 
     def launch_emr_studio(self, tenant_id: str, user_id: str) -> str:
+        """Return the SSO-mode Studio's access URL (a deep link).
+
+        The Studio must be provisioned out-of-band in SSO/IAM-Identity-Center
+        auth mode: the user's own Entra identity flows through natively, so
+        notebook activity is attributable per user — no presigned URL and no
+        shared platform identity involved.
+        """
         if self.emr_mock:
             return f"https://mock-emr.local/session/{uuid.uuid4()}"
 
-        if not settings.EMR_STUDIO_ID:
+        if not settings.EMR_STUDIO_URL:
             raise RuntimeError(
-                "EMR_STUDIO_ID is not configured. An EMR Studio must be "
-                "provisioned separately (AWS Console/IaC) — this app only "
-                "requests a presigned login URL into an existing one."
+                "EMR_STUDIO_URL is not configured. Provision an EMR Studio in "
+                "SSO auth mode (AWS Console/IaC) and set its access URL — the "
+                "platform only deep-links into it."
             )
-        client = make_boto3_client("emr")
-        resp = client.create_studio_presigned_url(
-            StudioId=settings.EMR_STUDIO_ID,
-            SessionExpirationDurationInSeconds=_SESSION_TTL_SECONDS,
-        )
-        return resp["PresignedURL"]
+        return settings.EMR_STUDIO_URL
 
 
 notebook_service = NotebookService()

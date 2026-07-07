@@ -292,9 +292,15 @@ ARN only, TTL-bound, deleted after the job) — never as plaintext env vars.
 - [ ] Fill in `SAGEMAKER_DOMAIN_ID` and `SAGEMAKER_TRAINING_IMAGE` (execution
       roles and EMR applications are per-tenant — provisioned by the pipeline,
       not env vars).
-- [ ] Provision an EMR Studio separately (AWS Console/IaC — this app never
-      creates one) and set `EMR_STUDIO_ID`. Note this is a different resource
-      from `EMR_SERVERLESS_APPLICATION_ID`.
+- [ ] Provision an EMR Studio separately in **SSO auth mode** (AWS Console/
+      IaC — this app never creates one) and set `EMR_STUDIO_URL`; the app
+      deep-links into it so each user's own identity applies. Known MVP
+      limitation: the Studio is platform-global while jobs are per-tenant
+      (workspace S3 locations must be tenant-prefixed); per-tenant Studios
+      are a later release.
+- [ ] Set `PLATFORM_API_BASE_URL` so training jobs receive
+      `ML_PLATFORM_API_URL` + a per-run token (via the job secret) and can
+      log metrics back to their run.
 - [ ] Create the DynamoDB table in real AWS (CloudFormation below, or
       `create_tables.py` with `DYNAMODB_ENDPOINT_URL` unset).
 - [ ] Create Entra security groups per the naming convention
@@ -422,7 +428,9 @@ target-group **placeholders** in the JSON files under `infrastructure/ecs/`.
 | `S3_ENDPOINT_URL` | S3 endpoint (blank → real AWS) | `http://localstack:4566` | *(blank)* |
 | `S3_ARTIFACTS_BUCKET` | Artifacts bucket | `ml-platform-artifacts` | `ml-platform-artifacts-prod` |
 | `EMR_SERVERLESS_APPLICATION_ID` | DEPRECATED — EMR apps are per-tenant (`Tenant.emrApplicationId`); kept only as a fallback for legacy job records | *(blank)* | *(blank)* |
-| `EMR_STUDIO_ID` | EMR Studio id (notebook workspace — provisioned separately, never created by this app) | *(blank)* | `es-abc123def456` |
+| `EMR_STUDIO_URL` | Access URL of the SSO-mode EMR Studio (provisioned separately; the app deep-links into it so each user's own identity applies) | *(blank)* | `https://es-….emrstudio-prod.us-east-1.amazonaws.com` |
+| `RUN_TOKEN_TTL_HOURS` | Lifetime of per-run machine tokens minted at job submission | `26` | `26` |
+| `PLATFORM_API_BASE_URL` | Public API base URL injected into jobs as `ML_PLATFORM_API_URL` | *(blank)* | `https://ml.truist.example` |
 | `EMR_MOCK_MODE` | Return fake EMR job runs / Studio URLs | `true` | `false` |
 | `SAGEMAKER_DOMAIN_ID` | SageMaker Studio domain | *(blank)* | `d-abc123` |
 | `SAGEMAKER_TRAINING_IMAGE` | Training container image for SageMaker jobs | *(blank)* | `…dkr.ecr…/training:latest` |

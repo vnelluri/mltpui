@@ -57,7 +57,9 @@ export function NotebookPage() {
     setLaunching(sessionType);
     try {
       const session = await notebooksApi.launch({ sessionType, tenantId });
-      window.open(session.presignedUrl, '_blank', 'noopener,noreferrer');
+      if (session.presignedUrl) {
+        window.open(session.presignedUrl, '_blank', 'noopener,noreferrer');
+      }
       await load();
     } catch (err) {
       setError(extractErrorMessage(err));
@@ -128,14 +130,20 @@ export function NotebookPage() {
                     Launched {formatRelative(s.createdAt)} · expires {formatDateTime(s.urlExpiresAt)}
                   </p>
                 </div>
-                <a
-                  href={s.presignedUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs font-medium text-brand-purple hover:underline"
-                >
-                  Reopen →
-                </a>
+                {/* URLs are returned once at launch and never persisted
+                    (they're credentials) — past sessions are metadata only. */}
+                {s.presignedUrl ? (
+                  <a
+                    href={s.presignedUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-xs font-medium text-brand-purple hover:underline"
+                  >
+                    Reopen →
+                  </a>
+                ) : (
+                  <span className="text-xs text-text-muted">Relaunch to open</span>
+                )}
               </div>
             ))}
           </div>

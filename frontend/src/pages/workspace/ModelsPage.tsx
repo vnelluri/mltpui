@@ -1,5 +1,6 @@
 import { useEffect, useState, type ReactNode } from 'react';
 import { modelsApi } from '../../api/models';
+import { governanceApi } from '../../api/governance';
 import { extractErrorMessage } from '../../api/client';
 import { useTenantContext } from '../../hooks/useTenantContext';
 import { PageHeader, Button, Modal, Field, Input, Select, Textarea } from '../../components/shared/ui';
@@ -16,6 +17,8 @@ export function ModelsPage() {
   const { isDataScientist, isTenantAdmin, isPlatformAdmin } = useTenantContext();
   const canRegister = isDataScientist;
   const canTransition = isTenantAdmin || isPlatformAdmin;
+  // Submitting FOR review is the model owner's action; MRM only decides.
+  const canSubmitReview = isDataScientist || isTenantAdmin || isPlatformAdmin;
 
   const [models, setModels] = useState<ModelVersion[]>([]);
   const [loading, setLoading] = useState(true);
@@ -32,6 +35,9 @@ export function ModelsPage() {
   const [cardModel, setCardModel] = useState<ModelVersion | null>(null);
   const [card, setCard] = useState<ModelCard | null>(null);
   const [cardLoading, setCardLoading] = useState(false);
+
+  const [submittingReview, setSubmittingReview] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -94,6 +100,30 @@ export function ModelsPage() {
     }
   };
 
+  const submitForReview = async (m: ModelVersion) => {
+    setSubmittingReview(`${m.name}-${m.version}`);
+    setNotice(null);
+    try {
+      // Idempotent server-side: re-submitting returns the existing pending
+      // review instead of stacking duplicates in the MRM queue.
+      const review = await governanceApi.create({
+        modelId: m.modelId,
+        modelName: m.name,
+        modelVersion: m.version,
+        tenantId: m.tenantId,
+      });
+      setNotice(
+        `${m.name} v${m.version} is ${
+          review.decision === 'pending' ? 'awaiting MRM review' : `already ${review.decision}`
+        } (review ${review.reviewId}).`,
+      );
+    } catch (err) {
+      setError(extractErrorMessage(err));
+    } finally {
+      setSubmittingReview(null);
+    }
+  };
+
   const columns: Column<ModelVersion>[] = [
     { key: 'name', header: 'Model', render: (m) => (
       <button onClick={() => void openCard(m)} className="text-left font-medium text-text-primary hover:text-brand-purple">
@@ -124,6 +154,25 @@ export function ModelsPage() {
     { key: 'framework', header: 'Framework', render: (m) => m.framework },
     { key: 'registeredBy', header: 'Registered by', render: (m) => m.registeredBy },
     { key: 'registeredAt', header: 'Registered', render: (m) => formatDate(m.registeredAt) },
+    ...(canSubmitReview
+      ? [
+          {
+            key: 'actions',
+            header: '',
+            render: (m: ModelVersion) =>
+              m.stage !== 'Archived' ? (
+                <Button
+                  variant="secondary"
+                  className="!px-3 !py-1 !text-xs"
+                  loading={submittingReview === `${m.name}-${m.version}`}
+                  onClick={() => void submitForReview(m)}
+                >
+                  Submit for review
+                </Button>
+              ) : null,
+          } as Column<ModelVersion>,
+        ]
+      : []),
   ];
 
   return (
@@ -133,6 +182,12 @@ export function ModelsPage() {
         description="Registered model versions and their governance stage."
         actions={canRegister && <Button onClick={() => setRegisterOpen(true)}>Register model</Button>}
       />
+
+      {notice && (
+        <div className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-200">
+          {notice}
+        </div>
+      )}
 
       <DataTable
         columns={columns}

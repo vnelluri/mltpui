@@ -26,6 +26,7 @@ from app.dependencies import get_current_user, require_role
 from app.middleware.tenant_scope import enforce_tenant_access, resolve_write_tenant
 from app.services.audit_service import audit_service
 from app.services.job_service import TenantNotProvisionedError, job_service
+from app.services.run_token_service import run_token_service
 from app.services.snowflake_service import KmsCipher
 
 logger = logging.getLogger("ml_platform.jobs")
@@ -231,10 +232,18 @@ async def submit_job(
 
     secret_arn = None
     try:
+        # Machine identity for the run: the training job authenticates back
+        # to this API (metrics/params/tags on its own run) with a run token
+        # delivered via the per-job secret — never through the API response.
+        secret_payload: Dict[str, Any] = {
+            "run_token": run_token_service.mint(job),
+            "experimentId": job.experimentId,
+            "runId": job.experimentRunId,
+        }
         if snowflake_token is not None:
-            secret_arn = job_service.store_job_token(
-                snowflake_token, job.jobId, tenant_id, snowflake_token_expires_at
-            )
+            secret_payload["snowflake_token"] = snowflake_token
+            secret_payload["snowflakeExpiresAt"] = snowflake_token_expires_at
+        secret_arn = job_service.store_job_secret(job.jobId, tenant_id, secret_payload)
         job = job_service.submit(job, tenant, secret_arn)
     except TenantNotProvisionedError as exc:
         _mark_submit_failed(job, secret_arn)

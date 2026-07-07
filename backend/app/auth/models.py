@@ -7,6 +7,10 @@ from pydantic import BaseModel, Field
 
 from app.db.models import Role
 
+# Machine principal role for training-run tokens (never held by humans, not
+# part of ROLE_PRECEDENCE — every require_role() guard rejects it by default).
+MACHINE_ROLE = "JobRun"
+
 
 class TokenPayload(BaseModel):
     """Subset of the validated Entra ID JWT claims we rely on."""
@@ -68,9 +72,18 @@ class CurrentUser(BaseModel):
     tenantId: Optional[str] = None
     memberships: List[Membership] = Field(default_factory=list)
     resolvedFromGroupId: Optional[str] = None
+    # Machine principals only (run tokens): the single run this identity may
+    # write to. Always None for human users.
+    machineJobId: Optional[str] = None
+    machineExperimentId: Optional[str] = None
+    machineRunId: Optional[str] = None
     # The user's raw Entra access token (prod) — used for Snowflake token
     # exchange. Never persisted or logged.
     accessToken: Optional[str] = Field(default=None, exclude=True)
+
+    @property
+    def is_machine(self) -> bool:
+        return self.role == MACHINE_ROLE
 
     @property
     def is_platform_admin(self) -> bool:

@@ -85,10 +85,15 @@ class Settings(BaseSettings):
     # that predate per-tenant applications.
     EMR_SERVERLESS_APPLICATION_ID: Optional[str] = None
     # Separate from EMR_SERVERLESS_APPLICATION_ID: an EMR Studio is a distinct
-    # AWS resource (the notebook workspace), provisioned out-of-band. This ID
-    # is only used to request a presigned login URL into it — the platform
-    # never creates the Studio itself.
-    EMR_STUDIO_ID: Optional[str] = None
+    # AWS resource (the notebook workspace), provisioned out-of-band in
+    # SSO/IAM-Identity-Center auth mode so each user's Entra identity flows
+    # through natively (attributable notebook activity — no shared platform
+    # identity, no presigned URLs). This is the Studio's access URL; the
+    # platform only deep-links into it.
+    # Known limitation: the Studio is platform-global while jobs are
+    # per-tenant — acceptable for MVP because workspace S3 locations are
+    # tenant-prefixed; per-tenant Studios are a later release.
+    EMR_STUDIO_URL: Optional[str] = None
     EMR_MOCK_MODE: bool = True
 
     # ── SageMaker ───────────────────────────────────────────────────────────
@@ -125,6 +130,15 @@ class Settings(BaseSettings):
     # ── Secrets Manager (token transit to jobs) ─────────────────────────────
     SECRETS_MANAGER_ENDPOINT_URL: Optional[str] = None
     SECRETS_MANAGER_JOB_TOKEN_PREFIX: str = "ml-platform/job-tokens/"
+
+    # ── Run tokens (machine identity for training jobs) ─────────────────────
+    # Lifetime of the per-run API token minted at job submission — slightly
+    # beyond the SageMaker MaxRuntimeInSeconds (24h) so a full-length job can
+    # log final metrics.
+    RUN_TOKEN_TTL_HOURS: int = 26
+    # Public base URL of this API, injected into jobs as ML_PLATFORM_API_URL
+    # so training code knows where to send metrics. Blank locally.
+    PLATFORM_API_BASE_URL: Optional[str] = None
 
     # ── CORS ────────────────────────────────────────────────────────────────
     CORS_ALLOWED_ORIGINS: List[str] = ["http://localhost:3000"]

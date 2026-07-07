@@ -47,32 +47,27 @@ class JobService:
         self.snowflake_mock = settings.SNOWFLAKE_MOCK_MODE
 
     # ── Secrets Manager token transit ────────────────────────────────────
-    def store_job_token(
-        self, plaintext_token: str, job_id: str, tenant_id: str, expires_at: str
+    def store_job_secret(
+        self, job_id: str, tenant_id: str, payload: dict
     ) -> str:
-        """Store the Snowflake token in Secrets Manager, return its ARN.
+        """Store the per-job secret (run token + optional Snowflake token)
+        in Secrets Manager and return its ARN.
 
-        In Snowflake mock mode, returns a fake ARN and writes nothing.
+        This is the only transit path for job credentials: the job receives
+        the secret ARN via its environment and reads the payload itself.
+        Written for real in every mode — LocalStack/moto provide Secrets
+        Manager locally, so dev exercises the same code path as prod.
         """
-        if self.snowflake_mock:
-            return f"mock-secret-arn/{uuid.uuid4()}"
-
         client = make_boto3_client(
             "secretsmanager", settings.SECRETS_MANAGER_ENDPOINT_URL
         )
         secret_name = f"{settings.SECRETS_MANAGER_JOB_TOKEN_PREFIX}{job_id}"
-        secret_string = json.dumps(
-            {
-                "snowflake_token": plaintext_token,
-                "expiresAt": expires_at,
-                "tenantId": tenant_id,
-            }
-        )
+        secret_string = json.dumps({**payload, "tenantId": tenant_id})
         try:
             resp = client.create_secret(
                 Name=secret_name,
                 SecretString=secret_string,
-                Description=f"Short-lived Snowflake token for job {job_id}",
+                Description=f"Short-lived credentials for job {job_id}",
             )
             return resp["ARN"]
         except client.exceptions.ResourceExistsException:
@@ -205,6 +200,16 @@ class JobService:
             "ML_PLATFORM_JOB_ID": job.jobId,
             "ML_PLATFORM_TENANT_ID": job.tenantId,
         }
+        # Everything the training code needs to log metrics back: which run
+        # it is, where the API lives, and where its run token waits.
+        if job.experimentId:
+            env["ML_PLATFORM_EXPERIMENT_ID"] = job.experimentId
+        if job.experimentRunId:
+            env["ML_PLATFORM_RUN_ID"] = job.experimentRunId
+        if settings.PLATFORM_API_BASE_URL:
+            env["ML_PLATFORM_API_URL"] = settings.PLATFORM_API_BASE_URL
+        if secret_arn:
+            env["ML_PLATFORM_JOB_SECRET_ARN"] = secret_arn
         if job.snowflakeDatabase:
             env["SNOWFLAKE_DATABASE"] = job.snowflakeDatabase
         if job.snowflakeSchema:

@@ -174,6 +174,8 @@ export interface GovernanceReview {
   reviewId: string;
   modelId: string;
   tenantId: string;
+  /** Who requested the review (DS/TenantAdmin); MRM sets reviewedBy on decision. */
+  submittedBy?: string | null;
   reviewedBy: string;
   decision: ReviewDecision;
   comments: string;
@@ -202,7 +204,8 @@ export interface NotebookSession {
   userId: string;
   tenantId: string;
   sessionType: SessionType;
-  presignedUrl: string;
+  /** Present only in the launch response — never persisted or re-listed. */
+  presignedUrl: string | null;
   urlExpiresAt: string;
   createdAt: string;
   status: NotebookStatus;

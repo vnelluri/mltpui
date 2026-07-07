@@ -47,7 +47,7 @@
         { "name": "ENTRA_CLIENT_SECRET", "valueFrom": "arn:aws:secretsmanager:us-east-1:ACCOUNT_ID:secret:ml-platform/entra/client-secret" },
         { "name": "ENTRA_AUDIENCE", "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/ml-platform/entra/audience" },
         { "name": "CORS_ALLOWED_ORIGINS", "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/ml-platform/cors/allowed-origins" },
-        { "name": "EMR_STUDIO_ID", "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/ml-platform/emr/studio-id" },
+        { "name": "EMR_STUDIO_URL", "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/ml-platform/emr/studio-url" },
         { "name": "SAGEMAKER_DOMAIN_ID", "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/ml-platform/sagemaker/domain-id" },
         { "name": "SAGEMAKER_TRAINING_IMAGE", "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/ml-platform/sagemaker/training-image" },
         { "name": "SNOWFLAKE_ACCOUNT", "valueFrom": "arn:aws:ssm:us-east-1:ACCOUNT_ID:parameter/ml-platform/snowflake/account" },

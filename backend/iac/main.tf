@@ -20,7 +20,7 @@ locals {
     ENTRA_CLIENT_ID          = "${local.ssm_arn}/entra/client-id"
     ENTRA_AUDIENCE           = "${local.ssm_arn}/entra/audience"
     CORS_ALLOWED_ORIGINS     = "${local.ssm_arn}/cors/allowed-origins"
-    EMR_STUDIO_ID            = "${local.ssm_arn}/emr/studio-id"
+    EMR_STUDIO_URL           = "${local.ssm_arn}/emr/studio-url"
     SAGEMAKER_DOMAIN_ID      = "${local.ssm_arn}/sagemaker/domain-id"
     SAGEMAKER_TRAINING_IMAGE = "${local.ssm_arn}/sagemaker/training-image"
     SNOWFLAKE_ACCOUNT        = "${local.ssm_arn}/snowflake/account"
@@ -162,12 +162,6 @@ data "aws_iam_policy_document" "task" {
       "sagemaker:CreateTrainingJob", "sagemaker:DescribeTrainingJob",
       "sagemaker:StopTrainingJob", "sagemaker:CreatePresignedDomainUrl",
     ]
-    resources = ["*"]
-  }
-
-  statement {
-    sid       = "EmrStudioPresignedUrl"
-    actions   = ["elasticmapreduce:CreateStudioPresignedUrl"]
     resources = ["*"]
   }
 
