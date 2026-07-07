@@ -107,6 +107,21 @@ class ModelRegisterRequest(BaseModel):
     driftBaselineUri: Optional[str] = None
 
 
+class ModelUpdateRequest(BaseModel):
+    """Post-training update: attach the trained artifact and the metadata
+    MRM reviews against. Registration happens FIRST (at inception, before
+    training) — this is how results land on the inventory entry afterwards."""
+
+    description: Optional[str] = None
+    runId: Optional[str] = None
+    framework: Optional[str] = None
+    artifactUri: Optional[str] = None
+    inputSchema: Optional[Dict[str, Any]] = None
+    outputSchema: Optional[Dict[str, Any]] = None
+    hasExplainer: Optional[bool] = None
+    driftBaselineUri: Optional[str] = None
+
+
 class StageTransitionRequest(BaseModel):
     stage: str
 
@@ -209,6 +224,59 @@ async def get_version(
     user: CurrentUser = Depends(get_current_user),
 ) -> ModelVersion:
     return _get_owned_version(name, ver, user, tenantId)
+
+
+@router.put("/{name}/versions/{ver}", response_model=ModelVersion)
+async def update_version(
+    name: str,
+    ver: int,
+    body: ModelUpdateRequest,
+    request: Request,
+    tenantId: Optional[str] = None,
+    user: CurrentUser = Depends(require_role("TenantAdmin", "DataScientist")),
+) -> ModelVersion:
+    """Attach training results (artifact, run, schemas) to a registered model.
+
+    Locked once a governance review is pending or approved: MRM must review
+    exactly the artifact that was submitted — it cannot be swapped afterwards.
+    A rejected review unlocks the version so the owner can fix and resubmit.
+    """
+    mv = _get_owned_version(name, ver, user, tenantId)
+    reviews = _gov_repo.list_by_model(mv.modelId)
+    blocking = next(
+        (r for r in reviews if r.decision in {"pending", "approved"}), None
+    )
+    if blocking is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"This version has a {blocking.decision} governance review "
+                f"({blocking.reviewId}) — its artifact and metadata are locked."
+            ),
+        )
+
+    if body.runId is not None and _exp_repo.get_run_by_id(mv.tenantId, body.runId) is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"runId '{body.runId}' does not exist in tenant '{mv.tenantId}'.",
+        )
+    if body.artifactUri is not None:
+        _validate_artifact_uri(body.artifactUri)
+
+    updates = body.model_dump(exclude_unset=True)
+    for field, value in updates.items():
+        setattr(mv, field, value)
+    updated = _repo.update(mv)
+    audit_service.record(
+        user=user,
+        action="model.update",
+        resource_type="ModelVersion",
+        resource_id=f"{name}/{ver}",
+        tenant_id=mv.tenantId,
+        details={"fields": sorted(updates.keys())},
+        request=request,
+    )
+    return updated
 
 
 @router.put("/{name}/versions/{ver}/stage", response_model=ModelVersion)

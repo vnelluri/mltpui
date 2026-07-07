@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useNavigate } from 'react-router-dom';
 import { governanceApi } from '../../api/governance';
 import { modelsApi } from '../../api/models';
 import { extractErrorMessage } from '../../api/client';
@@ -12,6 +12,7 @@ import type { GovernanceReview, ModelCard } from '../../types/platform';
 
 export function ReviewDetailPage() {
   const { reviewId } = useParams<{ reviewId: string }>();
+  const navigate = useNavigate();
   const { isMRM } = useTenantContext();
 
   const [review, setReview] = useState<GovernanceReview | null>(null);
@@ -60,11 +61,12 @@ export function ReviewDetailPage() {
     setSubmitting(decision);
     setSubmitError(null);
     try {
-      const updated = await governanceApi.decide(reviewId, { decision, comments: comments.trim(), conditions: conditions.trim() });
-      setReview(updated);
+      await governanceApi.decide(reviewId, { decision, comments: comments.trim(), conditions: conditions.trim() });
+      // Decision recorded — return to the queue, where this review now shows
+      // its final status and the next pending one is front and center.
+      navigate('/governance/reviews');
     } catch (err) {
       setSubmitError(extractErrorMessage(err));
-    } finally {
       setSubmitting(null);
     }
   };
@@ -111,23 +113,26 @@ export function ReviewDetailPage() {
                 <dl className="grid grid-cols-2 gap-3">
                   <KV label="Stage" value={String(card.stage)} />
                   <KV label="Framework" value={String(card.framework ?? '—')} />
-                  <KV label="Has explainer" value={card.hasExplainer ? 'Yes' : 'No'} />
-                  <KV label="Drift baseline" value={card.driftBaselineUri ? 'Configured' : 'Not configured'} />
+                  <KV label="Has explainer" value={card.explainability.hasExplainer ? 'Yes' : 'No'} />
+                  <KV
+                    label="Drift baseline"
+                    value={card.explainability.driftBaselineUri ? 'Configured' : 'Not configured'}
+                  />
                 </dl>
-                {'trainingRun' in card && card.trainingRun ? (
+                {card.trainingRun ? (
                   <div>
                     <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-muted">
                       Training metrics
                     </h4>
                     <pre className="overflow-auto rounded-lg bg-bg-dark p-3 font-mono text-xs text-text-secondary">
-                      {JSON.stringify((card.trainingRun as Record<string, unknown>).metrics ?? {}, null, 2)}
+                      {JSON.stringify(card.trainingRun.metrics ?? {}, null, 2)}
                     </pre>
                   </div>
                 ) : null}
                 <div>
                   <h4 className="mb-2 text-xs font-semibold uppercase tracking-wide text-text-muted">Schema</h4>
                   <pre className="overflow-auto rounded-lg bg-bg-dark p-3 font-mono text-xs text-text-secondary">
-                    {JSON.stringify({ input: card.inputSchema, output: card.outputSchema }, null, 2)}
+                    {JSON.stringify(card.schema, null, 2)}
                   </pre>
                 </div>
               </div>

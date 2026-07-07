@@ -518,7 +518,26 @@ curl -s -X POST http://localhost:8000/models \
 
 `artifactUri` must point at an existing S3 object/prefix and `runId` (optional)
 at an existing run in the tenant — the registry is what MRM reviews against,
-so both are verified at registration time.
+so both are verified whenever provided.
+
+**Model lifecycle:** register the model **at inception** (name + framework,
+no run or artifact yet) → train → attach results
+(`PUT /models/{name}/versions/{ver}` with `artifactUri`, `runId`,
+description) → submit for MRM review. A review can only be requested once
+the artifact is attached, and the version is **locked** (409) while a review
+is pending or once it is approved — MRM reviews exactly the binary that was
+submitted. A rejected review unlocks the version for fixes.
+
+```bash
+# After training completes: attach the trained binary + lineage
+curl -s -X PUT "http://localhost:8000/models/probability-of-default/versions/1?tenantId=tenant-risk-analytics" \
+  -H "Content-Type: application/json" \
+  -d '{
+        "artifactUri": "s3://ml-platform-artifacts/tenant-risk-analytics/models/risk-score-model/v2/model.pkl",
+        "runId": "demo-exp-risk-scoring-run-01",
+        "description": "Nightly PD training output"
+      }' | jq
+```
 
 **Submit a governance review decision** (MRM / PlatformAdmin)
 

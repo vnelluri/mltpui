@@ -5,11 +5,26 @@ export interface RegisterModelPayload {
   name: string;
   /** Target tenant — required for PlatformAdmin, own tenant otherwise. */
   tenantId?: string;
-  runId: string;
+  /** Optional at registration — models are registered at inception, before
+   * training; the run and artifact are attached later via update(). */
+  runId?: string;
   framework: Framework;
   description: string;
   artifactUri?: string;
   hasExplainer?: boolean;
+}
+
+/** Post-training update: attach the trained artifact + MRM metadata. */
+export interface UpdateModelPayload {
+  description?: string;
+  runId?: string;
+  framework?: Framework;
+  artifactUri?: string;
+  /** Model I/O contract shown to MRM on the review page (free-form JSON). */
+  inputSchema?: Record<string, unknown>;
+  outputSchema?: Record<string, unknown>;
+  hasExplainer?: boolean;
+  driftBaselineUri?: string;
 }
 
 export interface ListModelsParams {
@@ -34,6 +49,19 @@ export const modelsApi = {
   async listVersions(name: string, tenantId?: string): Promise<Paginated<ModelVersion>> {
     const { data } = await apiClient.get<Paginated<ModelVersion>>(
       `/models/${encodeURIComponent(name)}/versions`,
+      { params: { tenantId } },
+    );
+    return data;
+  },
+  async update(
+    name: string,
+    version: number,
+    payload: UpdateModelPayload,
+    tenantId?: string,
+  ): Promise<ModelVersion> {
+    const { data } = await apiClient.put<ModelVersion>(
+      `/models/${encodeURIComponent(name)}/versions/${version}`,
+      payload,
       { params: { tenantId } },
     );
     return data;

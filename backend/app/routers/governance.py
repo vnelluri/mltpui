@@ -78,6 +78,19 @@ async def create_review(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model version not found.")
     enforce_tenant_access(user, mv.tenantId)
 
+    # Models are registered at inception (before training); MRM reviews the
+    # trained artifact, so a review can only be requested once it's attached
+    # (PUT /models/{name}/versions/{ver} after training completes).
+    if not mv.artifactUri:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                f"'{mv.name}' v{mv.version} has no trained artifact attached yet. "
+                "Update the model version with artifactUri (and ideally runId) "
+                "before submitting for MRM review."
+            ),
+        )
+
     # Idempotency guard: one open review per model version. Re-submitting
     # returns the existing pending review instead of stacking duplicates in
     # the MRM queue.

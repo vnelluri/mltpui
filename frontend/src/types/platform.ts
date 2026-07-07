@@ -149,25 +149,43 @@ export interface ModelVersion {
   promotedBy?: string | null;
 }
 
+/** Mirrors backend build_model_card (services/model_card_service.py). */
 export interface ModelCard {
-  modelName: string;
+  modelId: string;
+  name: string;
   version: number;
+  tenantId: string;
   stage: ModelStage;
-  framework: string;
-  description: string;
-  intendedUse: string;
-  trainingData: Record<string, unknown>;
-  evaluation: Record<string, unknown>;
-  metrics: Record<string, number>;
-  fairness: Record<string, unknown>;
-  limitations: string[];
-  inputSchema: Record<string, unknown>;
-  outputSchema: Record<string, unknown>;
-  hasExplainer: boolean;
-  driftBaselineUri: string;
-  registeredBy: string;
+  framework: string | null;
+  description: string | null;
+  artifactUri: string | null;
   registeredAt: string;
-  [key: string]: unknown;
+  registeredBy: string | null;
+  promotedAt: string | null;
+  promotedBy: string | null;
+  schema: {
+    input: Record<string, unknown>;
+    output: Record<string, unknown>;
+  };
+  explainability: {
+    hasExplainer: boolean;
+    driftBaselineUri: string | null;
+  };
+  trainingRun: {
+    runId: string;
+    experimentId: string;
+    jobId: string | null;
+    status: string;
+    params: Record<string, unknown>;
+    metrics: Record<string, unknown>;
+    tags: Record<string, unknown>;
+    artifactUri: string | null;
+  } | null;
+  governance: {
+    reviewCount: number;
+    hasApprovedReview: boolean;
+    reviews: Record<string, unknown>[];
+  };
 }
 
 export interface GovernanceReview {
