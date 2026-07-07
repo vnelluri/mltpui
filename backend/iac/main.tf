@@ -41,6 +41,7 @@ locals {
     TENANT_PROVISIONING_EVENT_BUS    = "default"
     SNOWFLAKE_OAUTH_INTEGRATION_NAME = "ml_platform_oauth"
     SNOWFLAKE_DEFAULT_WAREHOUSE      = "COMPUTE_WH"
+    SNOWFLAKE_DEFAULT_ROLE           = "ML_PLATFORM_ROLE"
     SECRETS_MANAGER_JOB_TOKEN_PREFIX = var.job_token_secret_prefix
   }
 }

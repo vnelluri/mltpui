@@ -8,6 +8,8 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
 from app.auth.models import CurrentUser
+from app.config import settings
+from app.db.client import make_boto3_client
 from app.db.models import ModelStage, ModelVersion
 from app.db.repositories.experiment_repo import ExperimentRepository
 from app.db.repositories.governance_repo import GovernanceRepository
@@ -55,6 +57,41 @@ def _scope_tenant(user: CurrentUser, requested_tenant_id: Optional[str]) -> str:
     return user.tenantId
 
 
+def _validate_artifact_uri(artifact_uri: str) -> None:
+    """Reject artifact URIs that don't point at anything real in S3.
+
+    The registry is what MRM reviews against — a free-text URI that nobody
+    verified makes every downstream governance step untrustworthy. Accepts
+    either an exact object key or a prefix containing at least one object.
+    """
+    if not artifact_uri.startswith("s3://"):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="artifactUri must be an s3:// URI.",
+        )
+    bucket, _, key = artifact_uri[len("s3://"):].partition("/")
+    if not bucket or not key:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="artifactUri must include a bucket and key/prefix.",
+        )
+    client = make_boto3_client("s3", settings.S3_ENDPOINT_URL)
+    try:
+        try:
+            client.head_object(Bucket=bucket, Key=key)
+            return
+        except Exception:
+            resp = client.list_objects_v2(Bucket=bucket, Prefix=key, MaxKeys=1)
+            if resp.get("KeyCount", 0) > 0:
+                return
+    except Exception:
+        pass
+    raise HTTPException(
+        status_code=status.HTTP_400_BAD_REQUEST,
+        detail=f"No artifact found at {artifact_uri} — upload it before registering.",
+    )
+
+
 class ModelRegisterRequest(BaseModel):
     name: str
     # Target tenant: required for PlatformAdmin (who has no tenant of their
@@ -81,6 +118,18 @@ async def register_model(
     user: CurrentUser = Depends(require_role("DataScientist")),
 ) -> ModelVersion:
     tenant_id = resolve_write_tenant(user, body.tenantId).tenantId
+
+    # Registration trust: MRM reviews against these fields, so they must
+    # reference things that actually exist.
+    if body.runId:
+        if _exp_repo.get_run_by_id(tenant_id, body.runId) is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"runId '{body.runId}' does not exist in tenant '{tenant_id}'.",
+            )
+    if body.artifactUri:
+        _validate_artifact_uri(body.artifactUri)
+
     next_version = _repo.latest_version_number(tenant_id, body.name) + 1
     mv = ModelVersion(
         modelId=str(uuid.uuid4()),

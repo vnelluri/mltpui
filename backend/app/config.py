@@ -121,6 +121,14 @@ class Settings(BaseSettings):
     SNOWFLAKE_OAUTH_CLIENT_ID: Optional[str] = None
     SNOWFLAKE_OAUTH_CLIENT_SECRET: Optional[str] = None
     SNOWFLAKE_DEFAULT_WAREHOUSE: str = "COMPUTE_WH"
+    # The Snowflake ROLE requested in the token-exchange scope
+    # (session:role:<this>). Matches what setup_snowflake_integration.sql
+    # creates and pre-authorizes — NOT the integration name.
+    SNOWFLAKE_DEFAULT_ROLE: str = "ML_PLATFORM_ROLE"
+    # Minimum remaining validity a cached Snowflake token must have at job
+    # submission: the job consumes it for the initial data read, so an
+    # about-to-expire token fails fast here instead of mid-job.
+    SNOWFLAKE_TOKEN_MIN_REMAINING_MINUTES: int = 10
     SNOWFLAKE_MOCK_MODE: bool = True
 
     # ── KMS (Snowflake token encryption) ────────────────────────────────────

@@ -107,8 +107,10 @@ run_test "Create experiment" POST "/experiments" \
 run_test "List experiments"  GET  "/experiments"
 
 # ── Models ───────────────────────────────────────────────────────────────────
+# artifactUri must point at a real object (registration trust) — use a
+# seeded demo artifact.
 run_test "Register model version" POST "/models" \
-  "{\"name\":\"smoke-model-${SUFFIX}\",\"tenantId\":\"tenant-risk-analytics\",\"framework\":\"xgboost\",\"artifactUri\":\"s3://ml-platform-artifacts/models/smoke/1/\",\"description\":\"Smoke test model\"}"
+  "{\"name\":\"smoke-model-${SUFFIX}\",\"tenantId\":\"tenant-risk-analytics\",\"framework\":\"xgboost\",\"artifactUri\":\"s3://ml-platform-artifacts/tenant-risk-analytics/models/risk-score-model/v2/model.pkl\",\"description\":\"Smoke test model\"}"
 run_test "List models" GET "/models"
 
 # ── Group mappings / Snowflake / audit ───────────────────────────────────────

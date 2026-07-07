@@ -443,6 +443,8 @@ target-group **placeholders** in the JSON files under `infrastructure/ecs/`.
 | `SNOWFLAKE_OAUTH_CLIENT_ID` | OAuth client id | *(blank)* | *(from DESCRIBE INTEGRATION)* |
 | `SNOWFLAKE_OAUTH_CLIENT_SECRET` | OAuth client secret | *(blank)* | *(Secrets Manager)* |
 | `SNOWFLAKE_DEFAULT_WAREHOUSE` | Default warehouse | `COMPUTE_WH` | `ML_WH` |
+| `SNOWFLAKE_DEFAULT_ROLE` | Snowflake role in the token-exchange scope (from `setup_snowflake_integration.sql`) | `ML_PLATFORM_ROLE` | `ML_PLATFORM_ROLE` |
+| `SNOWFLAKE_TOKEN_MIN_REMAINING_MINUTES` | Minimum token runway required at job submission | `10` | `10` |
 | `SNOWFLAKE_MOCK_MODE` | Return mock Snowflake data | `true` | `false` |
 | `KMS_SNOWFLAKE_KEY_ARN` | KMS key for token encryption | *(blank → local alias)* | `arn:aws:kms:…:key/…` |
 | `KMS_ENDPOINT_URL` | KMS endpoint (blank → real AWS) | `http://localstack:4566` | *(blank)* |
@@ -509,11 +511,14 @@ curl -s -X POST http://localhost:8000/models \
         "name": "probability-of-default",
         "tenantId": "tenant-risk-analytics",
         "framework": "xgboost",
-        "artifactUri": "s3://ml-platform-artifacts/models/pd/1/",
-        "description": "PD model v1 from nightly run",
-        "runId": "run-0001"
+        "artifactUri": "s3://ml-platform-artifacts/tenant-risk-analytics/models/risk-score-model/v2/model.pkl",
+        "description": "PD model v1 from nightly run"
       }' | jq
 ```
+
+`artifactUri` must point at an existing S3 object/prefix and `runId` (optional)
+at an existing run in the tenant — the registry is what MRM reviews against,
+so both are verified at registration time.
 
 **Submit a governance review decision** (MRM / PlatformAdmin)
 

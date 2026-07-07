@@ -311,7 +311,9 @@ class SnowflakeService:
             "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
             "subject_token": entra_access_token,
             "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
-            "scope": f"session:role:{settings.SNOWFLAKE_OAUTH_INTEGRATION_NAME}",
+            # The scope names a Snowflake ROLE (created + pre-authorized by
+            # setup_snowflake_integration.sql) — not the integration name.
+            "scope": f"session:role:{settings.SNOWFLAKE_DEFAULT_ROLE}",
         }
         auth = None
         if settings.SNOWFLAKE_OAUTH_CLIENT_ID and settings.SNOWFLAKE_OAUTH_CLIENT_SECRET:

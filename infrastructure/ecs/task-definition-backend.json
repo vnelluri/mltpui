@@ -38,6 +38,7 @@
         { "name": "TENANT_PROVISIONING_EVENT_BUS", "value": "default" },
         { "name": "SNOWFLAKE_OAUTH_INTEGRATION_NAME", "value": "ml_platform_oauth" },
         { "name": "SNOWFLAKE_DEFAULT_WAREHOUSE", "value": "COMPUTE_WH" },
+        { "name": "SNOWFLAKE_DEFAULT_ROLE", "value": "ML_PLATFORM_ROLE" },
         { "name": "SECRETS_MANAGER_JOB_TOKEN_PREFIX", "value": "ml-platform/job-tokens/" },
         { "name": "S3_ARTIFACTS_BUCKET", "value": "ml-platform-artifacts" }
       ],
