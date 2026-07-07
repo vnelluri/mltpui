@@ -33,41 +33,43 @@ const ICONS = {
 
 function itemsForRole(role: string | null | undefined): NavItem[] {
   switch (role) {
+    // Shared ordering: Dashboard, Models, Jobs, Experiments, Feature Store,
+    // Snowflake — role-specific items follow. Job submission lives on the
+    // Jobs page (its "Submit job" button), not as a separate menu entry.
     case 'PlatformAdmin':
       return [
         { to: '/admin', label: 'Dashboard', icon: ICONS.dashboard },
-        { to: '/admin/tenants', label: 'Tenants', icon: ICONS.tenants },
-        { to: '/workspace/experiments', label: 'Experiments', icon: ICONS.experiments },
-        { to: '/workspace/jobs', label: 'Jobs', icon: ICONS.jobs },
         { to: '/workspace/models', label: 'Models', icon: ICONS.models },
+        { to: '/workspace/jobs', label: 'Jobs', icon: ICONS.jobs },
+        { to: '/workspace/experiments', label: 'Experiments', icon: ICONS.experiments },
         { to: '/feature-store', label: 'Feature Store', icon: ICONS.features },
-        { to: '/workspace/notebook', label: 'Notebook', icon: ICONS.notebook },
         { to: '/snowflake', label: 'Snowflake', icon: ICONS.snowflake },
+        { to: '/admin/tenants', label: 'Tenants', icon: ICONS.tenants },
+        { to: '/workspace/notebook', label: 'Notebook', icon: ICONS.notebook },
         { to: '/governance', label: 'Governance', icon: ICONS.governance },
         { to: '/audit', label: 'Audit Log', icon: ICONS.audit },
       ];
     case 'TenantAdmin':
       return [
         { to: '/tenant', label: 'Dashboard', icon: ICONS.dashboard },
-        { to: '/tenant/settings', label: 'Settings', icon: ICONS.settings },
-        { to: '/workspace/experiments', label: 'Experiments', icon: ICONS.experiments },
-        { to: '/workspace/jobs', label: 'Jobs', icon: ICONS.jobs },
         { to: '/workspace/models', label: 'Models', icon: ICONS.models },
+        { to: '/workspace/jobs', label: 'Jobs', icon: ICONS.jobs },
+        { to: '/workspace/experiments', label: 'Experiments', icon: ICONS.experiments },
         { to: '/feature-store', label: 'Feature Store', icon: ICONS.features },
-        { to: '/workspace/notebook', label: 'Notebook', icon: ICONS.notebook },
         { to: '/snowflake', label: 'Snowflake', icon: ICONS.snowflake },
+        { to: '/tenant/settings', label: 'Settings', icon: ICONS.settings },
+        { to: '/workspace/notebook', label: 'Notebook', icon: ICONS.notebook },
         { to: '/audit', label: 'Audit Log', icon: ICONS.audit },
       ];
     case 'DataScientist':
       return [
         { to: '/workspace', label: 'Dashboard', icon: ICONS.dashboard },
-        { to: '/workspace/experiments', label: 'Experiments', icon: ICONS.experiments },
-        { to: '/workspace/jobs', label: 'Jobs', icon: ICONS.jobs },
-        { to: '/workspace/submit', label: 'Submit Job', icon: ICONS.submit },
         { to: '/workspace/models', label: 'Models', icon: ICONS.models },
+        { to: '/workspace/jobs', label: 'Jobs', icon: ICONS.jobs },
+        { to: '/workspace/experiments', label: 'Experiments', icon: ICONS.experiments },
         { to: '/feature-store', label: 'Feature Store', icon: ICONS.features },
-        { to: '/workspace/notebook', label: 'Notebook', icon: ICONS.notebook },
         { to: '/snowflake', label: 'Snowflake', icon: ICONS.snowflake },
+        { to: '/workspace/notebook', label: 'Notebook', icon: ICONS.notebook },
       ];
     case 'MRM':
       return [
