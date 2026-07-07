@@ -109,6 +109,12 @@ class Tenant(BaseModel):
     emrApplicationId: Optional[str] = None
     sagemakerDomainId: Optional[str] = None
     executionRoleArn: Optional[str] = None
+    # Per-tenant Snowflake-token KMS key. Stored as an ARN because in the
+    # control-plane/dataplane account split, KMS ALIASES do not resolve
+    # across accounts — cross-account use requires the full key ARN (plus a
+    # key policy granting the backend task role). Unset locally, where the
+    # same-account alias convention still applies.
+    kmsKeyArn: Optional[str] = None
     # Defaults to ACTIVE so tenant records written before this field existed
     # keep working; the create-tenant flow sets PENDING explicitly until the
     # provisioning pipeline reports back.

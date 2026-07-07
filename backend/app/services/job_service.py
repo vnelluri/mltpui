@@ -13,8 +13,8 @@ from datetime import datetime, timezone
 from typing import Optional, Tuple
 
 from app.config import settings
-from app.db.client import make_boto3_client
 from app.db.models import JobStatus, Tenant, TrainingJob, utcnow_iso
+from app.services.dataplane_service import dataplane_client
 
 
 class TenantNotProvisionedError(RuntimeError):
@@ -58,8 +58,8 @@ class JobService:
         Written for real in every mode — LocalStack/moto provide Secrets
         Manager locally, so dev exercises the same code path as prod.
         """
-        client = make_boto3_client(
-            "secretsmanager", settings.SECRETS_MANAGER_ENDPOINT_URL
+        client = dataplane_client(
+            "secretsmanager", tenant_id, settings.SECRETS_MANAGER_ENDPOINT_URL
         )
         secret_name = f"{settings.SECRETS_MANAGER_JOB_TOKEN_PREFIX}{job_id}"
         secret_string = json.dumps({**payload, "tenantId": tenant_id})
@@ -76,12 +76,12 @@ class JobService:
             )
             return resp["ARN"]
 
-    def delete_job_token(self, secret_arn: Optional[str]) -> None:
+    def delete_job_token(self, secret_arn: Optional[str], tenant_id: str) -> None:
         """Delete a job token secret after the job completes/fails."""
         if not secret_arn or secret_arn.startswith("mock-secret-arn/"):
             return
-        client = make_boto3_client(
-            "secretsmanager", settings.SECRETS_MANAGER_ENDPOINT_URL
+        client = dataplane_client(
+            "secretsmanager", tenant_id, settings.SECRETS_MANAGER_ENDPOINT_URL
         )
         try:
             client.delete_secret(
@@ -127,7 +127,7 @@ class JobService:
             return f"mock-jr-{uuid.uuid4()}"
 
         self._require_provisioned(tenant, "emrApplicationId", "executionRoleArn")
-        client = make_boto3_client("emr-serverless")
+        client = dataplane_client("emr-serverless", job.tenantId)
         spark_params = [f"--conf spark.executor.instances={job.maxExecutors or job.instanceCount}"]
         if job.driverMemory:
             spark_params.append(f"--conf spark.driver.memory={job.driverMemory}")
@@ -173,7 +173,7 @@ class JobService:
                 "SAGEMAKER_TRAINING_IMAGE is not configured — required for "
                 "real SageMaker training job submission."
             )
-        client = make_boto3_client("sagemaker")
+        client = dataplane_client("sagemaker", job.tenantId)
         training_job_name = f"{job.name[:40]}-{uuid.uuid4().hex[:8]}"
         env = self._job_env(job, secret_arn)
         client.create_training_job(
@@ -257,7 +257,7 @@ class JobService:
                 job.durationSeconds = int(elapsed)
                 # Terminal: the short-lived Snowflake token secret is no
                 # longer needed — clean it up (not only on cancel).
-                self.delete_job_token(job.snowflakeSecretArn)
+                self.delete_job_token(job.snowflakeSecretArn, job.tenantId)
             return job
 
         return self._poll_real_status(job)
@@ -272,7 +272,7 @@ class JobService:
         previous_status = job.status
         try:
             if job.computeType == "emr_serverless" and job.emrJobRunId:
-                client = make_boto3_client("emr-serverless")
+                client = dataplane_client("emr-serverless", job.tenantId)
                 resp = client.get_job_run(
                     applicationId=self._emr_application_id(job),
                     jobRunId=job.emrJobRunId,
@@ -280,7 +280,7 @@ class JobService:
                 state = resp["jobRun"]["state"]
                 job.status = self._map_emr_state(state)
             elif job.computeType == "sagemaker" and job.sagemakerTrainingJobName:
-                client = make_boto3_client("sagemaker")
+                client = dataplane_client("sagemaker", job.tenantId)
                 resp = client.describe_training_job(
                     TrainingJobName=job.sagemakerTrainingJobName
                 )
@@ -292,7 +292,7 @@ class JobService:
             if job.status != JobStatus.CANCELLED.value:
                 job.completedAt = job.completedAt or utcnow_iso()
             # Terminal: clean up the short-lived Snowflake token secret.
-            self.delete_job_token(job.snowflakeSecretArn)
+            self.delete_job_token(job.snowflakeSecretArn, job.tenantId)
         return job
 
     @staticmethod
@@ -328,13 +328,13 @@ class JobService:
         if not is_mock:
             try:
                 if job.computeType == "emr_serverless" and job.emrJobRunId:
-                    client = make_boto3_client("emr-serverless")
+                    client = dataplane_client("emr-serverless", job.tenantId)
                     client.cancel_job_run(
                         applicationId=self._emr_application_id(job),
                         jobRunId=job.emrJobRunId,
                     )
                 elif job.computeType == "sagemaker" and job.sagemakerTrainingJobName:
-                    client = make_boto3_client("sagemaker")
+                    client = dataplane_client("sagemaker", job.tenantId)
                     client.stop_training_job(
                         TrainingJobName=job.sagemakerTrainingJobName
                     )
@@ -343,7 +343,7 @@ class JobService:
         job.status = JobStatus.CANCELLED.value
         job.completedAt = utcnow_iso()
         # Clean up any Snowflake token secret.
-        self.delete_job_token(job.snowflakeSecretArn)
+        self.delete_job_token(job.snowflakeSecretArn, job.tenantId)
         return job
 
     # ── Logs ─────────────────────────────────────────────────────────────

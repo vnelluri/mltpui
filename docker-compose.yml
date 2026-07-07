@@ -92,6 +92,7 @@ services:
       S3_ARTIFACTS_BUCKET: ml-platform-artifacts
       KMS_ENDPOINT_URL: http://localstack:4566
       SECRETS_MANAGER_ENDPOINT_URL: http://localstack:4566
+      STS_ENDPOINT_URL: http://localstack:4566
       SECRETS_MANAGER_JOB_TOKEN_PREFIX: ml-platform/job-tokens/
       AWS_ACCESS_KEY_ID: test
       AWS_SECRET_ACCESS_KEY: test

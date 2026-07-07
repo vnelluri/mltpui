@@ -16,17 +16,17 @@ locals {
 
   # SSM-backed config injected as container secrets (matches app/config.py).
   ssm_secrets = {
-    ENTRA_TENANT_ID          = "${local.ssm_arn}/entra/tenant-id"
-    ENTRA_CLIENT_ID          = "${local.ssm_arn}/entra/client-id"
-    ENTRA_AUDIENCE           = "${local.ssm_arn}/entra/audience"
-    CORS_ALLOWED_ORIGINS     = "${local.ssm_arn}/cors/allowed-origins"
-    EMR_STUDIO_URL           = "${local.ssm_arn}/emr/studio-url"
-    SAGEMAKER_DOMAIN_ID      = "${local.ssm_arn}/sagemaker/domain-id"
-    SAGEMAKER_TRAINING_IMAGE = "${local.ssm_arn}/sagemaker/training-image"
-    SNOWFLAKE_ACCOUNT        = "${local.ssm_arn}/snowflake/account"
-    SNOWFLAKE_TOKEN_URL      = "${local.ssm_arn}/snowflake/token-url"
+    ENTRA_TENANT_ID           = "${local.ssm_arn}/entra/tenant-id"
+    ENTRA_CLIENT_ID           = "${local.ssm_arn}/entra/client-id"
+    ENTRA_AUDIENCE            = "${local.ssm_arn}/entra/audience"
+    CORS_ALLOWED_ORIGINS      = "${local.ssm_arn}/cors/allowed-origins"
+    EMR_STUDIO_URL            = "${local.ssm_arn}/emr/studio-url"
+    SAGEMAKER_DOMAIN_ID       = "${local.ssm_arn}/sagemaker/domain-id"
+    SAGEMAKER_TRAINING_IMAGE  = "${local.ssm_arn}/sagemaker/training-image"
+    SNOWFLAKE_ACCOUNT         = "${local.ssm_arn}/snowflake/account"
+    SNOWFLAKE_TOKEN_URL       = "${local.ssm_arn}/snowflake/token-url"
     SNOWFLAKE_OAUTH_CLIENT_ID = "${local.ssm_arn}/snowflake/oauth-client-id"
-    KMS_SNOWFLAKE_KEY_ARN    = "${local.ssm_arn}/kms/snowflake-key-arn"
+    KMS_SNOWFLAKE_KEY_ARN     = "${local.ssm_arn}/kms/snowflake-key-arn"
   }
 
   plain_environment = {
@@ -43,6 +43,7 @@ locals {
     SNOWFLAKE_DEFAULT_WAREHOUSE      = "COMPUTE_WH"
     SNOWFLAKE_DEFAULT_ROLE           = "ML_PLATFORM_ROLE"
     SECRETS_MANAGER_JOB_TOKEN_PREFIX = var.job_token_secret_prefix
+    DATAPLANE_RUNTIME_ROLE_ARN       = var.dataplane_runtime_role_arn == null ? "" : var.dataplane_runtime_role_arn
   }
 }
 
@@ -188,6 +189,17 @@ data "aws_iam_policy_document" "task" {
         "arn:aws:events:${var.region}:${local.account_id}:event-bus/default"
       )
     ]
+  }
+
+  # Account split: EMR and job-secret operations go through the dataplane
+  # runtime role, assumed with tenantId session tags (ABAC).
+  dynamic "statement" {
+    for_each = var.dataplane_runtime_role_arn == null ? [] : [1]
+    content {
+      sid       = "AssumeDataplaneRuntime"
+      actions   = ["sts:AssumeRole", "sts:TagSession"]
+      resources = [var.dataplane_runtime_role_arn]
+    }
   }
 }
 

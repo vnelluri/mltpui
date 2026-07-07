@@ -104,6 +104,17 @@ class Settings(BaseSettings):
     SAGEMAKER_TRAINING_IMAGE: Optional[str] = None
     SAGEMAKER_MOCK_MODE: bool = True
 
+    # ── Control-plane / dataplane account split ─────────────────────────────
+    # Unset (default): single-account mode — the backend touches EMR
+    # Serverless and job-token secrets with its own credentials (works for
+    # local dev and a one-account MVP unchanged).
+    # Set to the dataplane account's ml-platform-dataplane-runtime role ARN:
+    # every EMR/job-secret call assumes it with a tenantId SESSION TAG, so
+    # the dataplane's ABAC policy guarantees a request tagged for tenant A
+    # cannot touch tenant B's application even if the backend has a bug.
+    DATAPLANE_RUNTIME_ROLE_ARN: Optional[str] = None
+    STS_ENDPOINT_URL: Optional[str] = None  # LocalStack/moto only
+
     # ── Tenant provisioning (dataplane resources via IaC pipeline) ──────────
     # true (local dev): tenant creation self-provisions mock resource IDs and
     #   the tenant S3 prefix, and flips straight to provisioningStatus=active.

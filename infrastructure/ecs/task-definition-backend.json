@@ -35,6 +35,7 @@
         { "name": "SAGEMAKER_MOCK_MODE", "value": "false" },
         { "name": "SNOWFLAKE_MOCK_MODE", "value": "false" },
         { "name": "TENANT_PROVISIONING_MOCK_MODE", "value": "false" },
+        { "name": "DATAPLANE_RUNTIME_ROLE_ARN", "value": "" },
         { "name": "TENANT_PROVISIONING_EVENT_BUS", "value": "default" },
         { "name": "SNOWFLAKE_OAUTH_INTEGRATION_NAME", "value": "ml_platform_oauth" },
         { "name": "SNOWFLAKE_DEFAULT_WAREHOUSE", "value": "COMPUTE_WH" },

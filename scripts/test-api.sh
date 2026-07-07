@@ -87,7 +87,7 @@ run_test "Current user (auth/me)"  GET  "/auth/me"
 
 # ── Tenants ──────────────────────────────────────────────────────────────────
 run_test "Create tenant" POST "/tenants" \
-  "{\"name\":\"Smoke Test Tenant ${SUFFIX}\",\"allowedFrameworks\":[\"pytorch\",\"xgboost\"],\"computeQuotaVcpuHours\":1000}"
+  "{\"tenantId\":\"smoke-${SUFFIX}\",\"name\":\"Smoke Test Tenant ${SUFFIX}\",\"allowedFrameworks\":[\"pytorch\",\"xgboost\"],\"computeQuotaVcpuHours\":1000}"
 run_test "List tenants"  GET  "/tenants"
 
 # ── Snowflake connect (required before submitting a job with a Snowflake

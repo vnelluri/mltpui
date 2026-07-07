@@ -150,8 +150,17 @@ class KmsCipher:
     def _key_id(self) -> str:
         if settings.KMS_SNOWFLAKE_KEY_ARN:
             return settings.KMS_SNOWFLAKE_KEY_ARN
-        # Tenant-specific alias convention, single shared alias locally.
         if self.tenant_id:
+            # Prefer the tenant record's key ARN (written back by the
+            # provisioning pipeline) — required in the control-plane/
+            # dataplane account split, where aliases don't resolve across
+            # accounts and access comes from the key policy.
+            from app.db.repositories.tenant_repo import TenantRepository
+
+            tenant = TenantRepository().get(self.tenant_id)
+            if tenant is not None and tenant.kmsKeyArn:
+                return tenant.kmsKeyArn
+            # Same-account/local fallback: tenant alias convention.
             return f"alias/ml-platform-snowflake-{self.tenant_id}"
         return "alias/ml-platform-snowflake"
 

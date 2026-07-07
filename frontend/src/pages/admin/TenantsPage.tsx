@@ -20,6 +20,7 @@ export function TenantsPage() {
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
 
+  const [tenantId, setTenantId] = useState('');
   const [name, setName] = useState('');
   const [quota, setQuota] = useState(1000);
   const [frameworks, setFrameworks] = useState<Framework[]>(ALL_FRAMEWORKS);
@@ -49,15 +50,26 @@ export function TenantsPage() {
   };
 
   const submitCreate = async () => {
-    if (!name.trim()) {
-      setFormError('Tenant name is required.');
+    const id = tenantId.trim().toLowerCase();
+    if (!id || !name.trim()) {
+      setFormError('Tenant ID and name are required.');
+      return;
+    }
+    if (!/^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$/.test(id)) {
+      setFormError('Tenant ID must be a lowercase slug (letters, digits, hyphens; 3–50 chars).');
       return;
     }
     setSaving(true);
     setFormError(null);
     try {
-      await tenantsApi.create({ name: name.trim(), computeQuotaVcpuHours: quota, allowedFrameworks: frameworks });
+      await tenantsApi.create({
+        tenantId: id,
+        name: name.trim(),
+        computeQuotaVcpuHours: quota,
+        allowedFrameworks: frameworks,
+      });
       setModalOpen(false);
+      setTenantId('');
       setName('');
       setQuota(1000);
       setFrameworks(ALL_FRAMEWORKS);
@@ -167,7 +179,19 @@ export function TenantsPage() {
               {formError}
             </div>
           )}
-          <Field label="Tenant name" required>
+          <Field
+            label="Tenant ID"
+            required
+            hint="The key slug used in AD group names (myapp-<tenantId>-<role>) and S3 prefixes. Cannot be changed later."
+          >
+            <Input
+              value={tenantId}
+              onChange={(e) => setTenantId(e.target.value)}
+              className="font-mono"
+              placeholder="e.g. wealth-management"
+            />
+          </Field>
+          <Field label="Tenant name" required hint="Display name this tenant ID maps to — editable later.">
             <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Wealth Management" />
           </Field>
           <Field label="Compute quota (vCPU-hours / month)" required>

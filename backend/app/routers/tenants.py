@@ -3,7 +3,7 @@ only; get/update/metrics are also reachable by TenantAdmin for their own
 tenant."""
 from __future__ import annotations
 
-import uuid
+import re
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -26,7 +26,16 @@ _job_repo = JobRepository()
 _model_repo = ModelRepository()
 
 
+# The tenant ID is the KEY that ties everything together: it is the segment
+# that appears in the Entra group names (myapp-{tenantId}-{role}), the S3
+# prefix, and the dataplane resource names — so it is chosen by the admin at
+# creation (never generated) and must be a stable lowercase slug. The Tenant
+# record then maps this ID to the human display name and config.
+_TENANT_ID_RE = re.compile(r"^[a-z0-9][a-z0-9-]{1,48}[a-z0-9]$")
+
+
 class TenantCreateRequest(BaseModel):
+    tenantId: str
     name: str
     computeQuotaVcpuHours: int = 1000
     allowedFrameworks: List[str] = ["pytorch", "tensorflow", "sklearn", "xgboost"]
@@ -48,6 +57,7 @@ class ProvisioningWriteBackRequest(BaseModel):
     emrApplicationId: Optional[str] = None
     sagemakerDomainId: Optional[str] = None
     executionRoleArn: Optional[str] = None
+    kmsKeyArn: Optional[str] = None
     s3BucketName: Optional[str] = None
 
 
@@ -57,7 +67,21 @@ async def create_tenant(
     request: Request,
     user: CurrentUser = Depends(require_role("PlatformAdmin")),
 ) -> Tenant:
-    tenant_id = f"tenant-{uuid.uuid4().hex[:10]}"
+    tenant_id = body.tenantId.strip().lower()
+    if not _TENANT_ID_RE.match(tenant_id):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=(
+                "tenantId must be a lowercase slug (letters, digits, hyphens; "
+                "3-50 chars) — it appears in the AD group names "
+                "(myapp-<tenantId>-<role>) and S3 prefixes."
+            ),
+        )
+    if _tenant_repo.get(tenant_id) is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Tenant '{tenant_id}' already exists.",
+        )
     tenant = Tenant(
         tenantId=tenant_id,
         name=body.name,
@@ -115,7 +139,7 @@ async def complete_provisioning(
                 "executionRoleArn."
             ),
         )
-    for field in ("emrApplicationId", "sagemakerDomainId", "executionRoleArn", "s3BucketName"):
+    for field in ("emrApplicationId", "sagemakerDomainId", "executionRoleArn", "kmsKeyArn", "s3BucketName"):
         value = getattr(body, field)
         if value is not None:
             setattr(tenant, field, value)

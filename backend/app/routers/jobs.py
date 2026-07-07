@@ -87,7 +87,7 @@ def _mark_submit_failed(job: TrainingJob, secret_arn: Optional[str]) -> None:
     """Best-effort cleanup when compute dispatch fails after the platform
     record was written: delete the token secret, mark the job (and its linked
     run) failed. Never masks the original dispatch error."""
-    job_service.delete_job_token(secret_arn)
+    job_service.delete_job_token(secret_arn, job.tenantId)
     job.status = JobStatus.FAILED.value
     job.completedAt = job.completedAt or utcnow_iso()
     try:

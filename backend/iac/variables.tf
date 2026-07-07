@@ -96,6 +96,12 @@ variable "tenant_execution_role_arn_pattern" {
   type        = string
 }
 
+variable "dataplane_runtime_role_arn" {
+  description = "ARN of the dataplane account's ml-platform-dataplane-runtime role. Set for the control-plane/dataplane account split: the backend assumes it (with tenantId session tags) for EMR and job-secret operations. Leave null for single-account deployments."
+  type        = string
+  default     = null
+}
+
 variable "provisioning_event_bus_arn" {
   description = "EventBridge bus ARN for TenantProvisioningRequested events."
   type        = string
