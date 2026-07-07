@@ -30,3 +30,6 @@ Thumbs.db
 # (single initial commits, remotes vnelluri/mlp + vnelluri/mltp). Safe to
 # delete once the monorepo is pushed; restore by renaming back to .git.
 .git.bak/
+
+# Terraform working dirs (provider binaries) — never commit
+.terraform/
