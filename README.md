@@ -291,12 +291,14 @@ ARN only, TTL-bound, deleted after the job) — never as plaintext env vars.
 - [ ] Fill in `SAGEMAKER_DOMAIN_ID` and `SAGEMAKER_TRAINING_IMAGE` (execution
       roles and EMR applications are per-tenant — provisioned by the pipeline,
       not env vars).
-- [ ] Provision an EMR Studio separately in **SSO auth mode** (AWS Console/
-      IaC — this app never creates one) and set `EMR_STUDIO_URL`; the app
-      deep-links into it so each user's own identity applies. Known MVP
-      limitation: the Studio is platform-global while jobs are per-tenant
-      (workspace S3 locations must be tenant-prefixed); per-tenant Studios
-      are a later release.
+- [ ] Provision an EMR Studio in **SSO auth mode** using the `emr-studio/iac`
+      Terraform module (this app never calls the EMR Studio API itself — it
+      only deep-links to the module's `url` output) and set `EMR_STUDIO_URL`
+      from it, so each user's own identity applies. Requires AWS IAM Identity
+      Center already enabled with Entra federated as its external IdP (see
+      `emr-studio/iac/README.md`). Known MVP limitation: the Studio is
+      platform-global while jobs are per-tenant (workspace S3 locations must
+      be tenant-prefixed); per-tenant Studios are a later release.
 - [ ] Set `PLATFORM_API_BASE_URL` so training jobs receive
       `ML_PLATFORM_API_URL` + a per-run token (via the job secret) and can
       log metrics back to their run.
@@ -436,7 +438,7 @@ target-group **placeholders** in the JSON files under `infrastructure/ecs/`.
 | `S3_ENDPOINT_URL` | S3 endpoint (blank → real AWS) | `http://localstack:4566` | *(blank)* |
 | `S3_ARTIFACTS_BUCKET` | Artifacts bucket | `ml-platform-artifacts` | `ml-platform-artifacts-prod` |
 | `EMR_SERVERLESS_APPLICATION_ID` | DEPRECATED — EMR apps are per-tenant (`Tenant.emrApplicationId`); kept only as a fallback for legacy job records | *(blank)* | *(blank)* |
-| `EMR_STUDIO_URL` | Access URL of the SSO-mode EMR Studio (provisioned separately; the app deep-links into it so each user's own identity applies) | *(blank)* | `https://es-….emrstudio-prod.us-east-1.amazonaws.com` |
+| `EMR_STUDIO_URL` | Access URL of the SSO-mode EMR Studio (the `emr-studio/iac` module's `url` output; the app deep-links into it so each user's own identity applies) | *(blank)* | `https://es-….emrstudio-prod.us-east-1.amazonaws.com` |
 | `RUN_TOKEN_TTL_HOURS` | Lifetime of per-run machine tokens minted at job submission | `26` | `26` |
 | `PLATFORM_API_BASE_URL` | Public API base URL injected into jobs as `ML_PLATFORM_API_URL` | *(blank)* | `https://ml.truist.example` |
 | `EMR_MOCK_MODE` | Return fake EMR job runs / Studio URLs | `true` | `false` |
