@@ -29,7 +29,7 @@ _audit_repo = AuditRepository()
 class ReviewCreateRequest(BaseModel):
     modelId: str
     modelName: str
-    modelVersion: int
+    modelVersion: str
     # Model names are tenant-scoped; needed only when falling back to a
     # name-based lookup (i.e. modelId doesn't resolve).
     tenantId: Optional[str] = None
@@ -39,6 +39,10 @@ class ReviewDecisionRequest(BaseModel):
     decision: str
     comments: Optional[str] = None
     conditions: Optional[str] = None
+    # MRM's own review artifacts (validation report, test evidence, memo
+    # links) recorded alongside the decision — the counterpart of the
+    # results the data scientist attached before submitting.
+    mrmArtifactUris: List[str] = []
     expiresAt: Optional[str] = None
 
 
@@ -91,14 +95,14 @@ async def create_review(
             ),
         )
 
-    # Idempotency guard: one open review per model version. Re-submitting
-    # returns the existing pending review instead of stacking duplicates in
-    # the MRM queue.
+    # Idempotency guard: one open review per model VERSION (modelId is shared
+    # across versions). Re-submitting returns the existing pending review
+    # instead of stacking duplicates in the MRM queue.
     existing = next(
         (
             r
             for r in _repo.list_by_model(mv.modelId)
-            if r.decision == ReviewDecision.PENDING.value
+            if r.modelVersion == mv.version and r.decision == ReviewDecision.PENDING.value
         ),
         None,
     )
@@ -158,6 +162,7 @@ async def submit_decision(
     review.decision = body.decision
     review.comments = body.comments
     review.conditions = body.conditions
+    review.mrmArtifactUris = [u.strip() for u in body.mrmArtifactUris if u.strip()]
     review.expiresAt = body.expiresAt
     review.reviewedBy = user.userId
     review.reviewedAt = utcnow_iso()
@@ -176,14 +181,15 @@ async def submit_decision(
 
 @router.get("/export/{model_id}/{ver}")
 async def export_governance_package(
-    model_id: str, ver: int, user: CurrentUser = Depends(require_role("MRM"))
+    model_id: str, ver: str, user: CurrentUser = Depends(require_role("MRM"))
 ) -> Dict[str, Any]:
     mv = _model_repo.get_by_model_id(model_id, ver)
     if mv is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Model version not found.")
     enforce_tenant_access(user, mv.tenantId)
     run = _exp_repo.get_run_by_id(mv.tenantId, mv.runId) if mv.runId else None
-    reviews = _repo.list_by_model(mv.modelId)
+    # The export package describes ONE version — narrow the reviews to it.
+    reviews = [r for r in _repo.list_by_model(mv.modelId) if r.modelVersion == mv.version]
     audit_events, _ = _audit_repo.list_by_tenant(mv.tenantId, limit=200)
     audit_dicts = [e.model_dump() for e in audit_events if e.resourceId in {mv.modelId, f"{mv.name}/{mv.version}"}]
     return build_governance_export(mv, run, reviews, audit_dicts)

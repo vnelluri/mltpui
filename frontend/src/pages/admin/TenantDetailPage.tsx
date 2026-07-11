@@ -54,7 +54,7 @@ export function TenantDetailPage() {
 
   if (error || !tenant) {
     return (
-      <div className="rounded-xl border border-red-500/30 bg-bg-card p-8 text-sm text-red-300">
+      <div className="rounded-xl border border-red-500/30 bg-bg-card p-8 text-sm text-red-600">
         {error ?? 'Tenant not found.'}
       </div>
     );

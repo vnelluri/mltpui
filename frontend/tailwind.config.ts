@@ -4,21 +4,27 @@ const config: Config = {
   content: ['./index.html', './src/**/*.{ts,tsx}'],
   theme: {
     extend: {
+      // Light theme. The semantic names are historical (bg-dark = page
+      // background, bg-card = surface, bg-elevated = borders/hover fills) —
+      // every component styles against these tokens, so the palette lives
+      // here and in globals.css only. The login hero deliberately stays on
+      // brand-valhalla (dark) as a branded surface.
       colors: {
         brand: {
-          purple: '#A6A3E0',
+          // Darkened from the on-dark accent (#A6A3E0) so it reads on white.
+          purple: '#6C63C5',
           valhalla: '#2E1A47',
           white: '#FFFFFF',
         },
         bg: {
-          dark: '#0A0614',
-          card: '#120D22',
-          elevated: '#1A1230',
+          dark: '#F4F3FA',
+          card: '#FFFFFF',
+          elevated: '#E8E5F2',
         },
         text: {
-          primary: '#F0EEFF',
-          secondary: '#9B94C0',
-          muted: '#5A5280',
+          primary: '#241E3D',
+          secondary: '#5A5280',
+          muted: '#8D86AD',
         },
       },
       fontFamily: {
@@ -26,7 +32,7 @@ const config: Config = {
         mono: ['"JetBrains Mono"', 'ui-monospace', 'monospace'],
       },
       borderColor: {
-        DEFAULT: '#1A1230',
+        DEFAULT: '#E8E5F2',
       },
       keyframes: {
         'fade-in': {

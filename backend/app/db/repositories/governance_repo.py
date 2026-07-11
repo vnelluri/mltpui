@@ -65,8 +65,13 @@ class GovernanceRepository:
         )
         return [GovernanceReview(**strip_internal(i)) for i in resp.get("Items", [])]
 
-    def has_approved_review(self, model_id: str) -> bool:
+    def has_approved_review(self, model_id: str, version: Optional[str] = None) -> bool:
+        """True when the model (or, with ``version``, that specific version)
+        has an approved review. modelId is shared across a model's versions,
+        so version-scoped callers (e.g. the Production gate) must pass it."""
         for review in self.list_by_model(model_id):
-            if review.decision == "approved":
+            if review.decision == "approved" and (
+                version is None or review.modelVersion == version
+            ):
                 return True
         return False

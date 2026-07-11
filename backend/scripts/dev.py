@@ -145,7 +145,16 @@ def main() -> None:
 
     run_step("scripts/setup_local_kms.py", label="Setting up local KMS key")
     run_step("scripts/create_tables.py", label="Creating DynamoDB table")
-    run_step("scripts/seed_demo_data.py", label="Seeding demo data")
+    # Demo seeding is opt-out: set SEED_DEMO_DATA=false in backend/.env to
+    # start from an empty platform. Even then, the dev user's tenant is
+    # seeded so tenant-scoped flows (models, reviews, notebooks) work.
+    if os.environ.get("SEED_DEMO_DATA", "true").strip().lower() in {"false", "0", "no"}:
+        run_step(
+            "scripts/seed_dev_tenant.py",
+            label="Seeding dev tenant only (SEED_DEMO_DATA=false — no demo data)",
+        )
+    else:
+        run_step("scripts/seed_demo_data.py", label="Seeding demo data")
 
     print(
         f"""

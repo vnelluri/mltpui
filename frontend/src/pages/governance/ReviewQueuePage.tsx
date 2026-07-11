@@ -5,8 +5,16 @@ import { extractErrorMessage } from '../../api/client';
 import { PageHeader, Select } from '../../components/shared/ui';
 import { DataTable, type Column } from '../../components/shared/DataTable';
 import { StatusBadge } from '../../components/shared/StatusBadge';
+import { ModelJourneyMini } from '../../components/models/ModelJourney';
 import { formatDate } from '../../lib/format';
-import type { GovernanceReview } from '../../types/platform';
+import type { GovernanceReview, ModelDevStatus } from '../../types/platform';
+
+/** A review's decision maps directly onto the model-journey stage. */
+const DECISION_TO_DEV_STATUS: Record<string, ModelDevStatus> = {
+  pending: 'submitted_to_mrm',
+  approved: 'mrm_approved',
+  rejected: 'mrm_rejected',
+};
 
 const DECISION_OPTIONS = ['', 'pending', 'approved', 'rejected'];
 
@@ -44,6 +52,15 @@ export function ReviewQueuePage() {
       </div>
     ) },
     { key: 'tenant', header: 'Tenant', render: (r) => r.tenantId },
+    { key: 'submitted', header: 'Submitted', render: (r) => (
+      <div>
+        <span className="block">{r.createdAt ? formatDate(r.createdAt) : '—'}</span>
+        {r.submittedBy && <span className="block text-xs text-text-muted">{r.submittedBy}</span>}
+      </div>
+    ) },
+    { key: 'journey', header: 'Journey', render: (r) => (
+      <ModelJourneyMini devStatus={DECISION_TO_DEV_STATUS[r.decision] ?? 'submitted_to_mrm'} />
+    ) },
     { key: 'decision', header: 'Decision', render: (r) => <StatusBadge status={r.decision} /> },
     { key: 'reviewedBy', header: 'Reviewed by', render: (r) => r.reviewedBy ?? '—' },
     { key: 'reviewedAt', header: 'Reviewed', render: (r) => formatDate(r.reviewedAt) },

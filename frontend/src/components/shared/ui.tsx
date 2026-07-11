@@ -17,7 +17,7 @@ interface ButtonProps extends ButtonHTMLAttributes<HTMLButtonElement> {
 }
 
 const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
-  primary: 'bg-brand-purple text-brand-valhalla hover:bg-brand-purple/90',
+  primary: 'bg-brand-purple text-white hover:bg-brand-purple/90',
   secondary: 'border border-bg-elevated bg-bg-elevated/40 text-text-primary hover:bg-bg-elevated',
   ghost: 'text-text-secondary hover:bg-bg-elevated hover:text-text-primary',
   danger: 'bg-red-500 text-white hover:bg-red-600',
@@ -206,9 +206,9 @@ export function InlineAlert({
 }) {
   const tones = {
     info: 'border-brand-purple/30 bg-brand-purple/10 text-text-primary',
-    warn: 'border-amber-500/30 bg-amber-500/10 text-amber-200',
-    error: 'border-red-500/30 bg-red-500/10 text-red-200',
-    success: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-200',
+    warn: 'border-amber-500/30 bg-amber-500/10 text-amber-700',
+    error: 'border-red-500/30 bg-red-500/10 text-red-700',
+    success: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700',
   };
   return (
     <div className={`rounded-lg border px-4 py-3 text-sm ${tones[tone]} ${className}`}>{children}</div>

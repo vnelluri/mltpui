@@ -132,7 +132,7 @@ export function SnowflakeTableBrowser({ onSelectTable, selected }: SnowflakeTabl
 
   if (dbError) {
     return (
-      <div className="rounded-xl border border-red-500/30 bg-bg-card p-4 text-sm text-red-300">{dbError}</div>
+      <div className="rounded-xl border border-red-500/30 bg-bg-card p-4 text-sm text-red-600">{dbError}</div>
     );
   }
 
@@ -153,7 +153,7 @@ export function SnowflakeTableBrowser({ onSelectTable, selected }: SnowflakeTabl
             {dbNode?.expanded && (
               <div className="ml-5 border-l border-bg-elevated pl-2">
                 {dbNode.loading && <div className="px-2 py-1 text-xs text-text-muted">Loading schemas…</div>}
-                {dbNode.error && <div className="px-2 py-1 text-xs text-red-300">{dbNode.error}</div>}
+                {dbNode.error && <div className="px-2 py-1 text-xs text-red-600">{dbNode.error}</div>}
                 {dbNode.children?.map((schema) => {
                   const key = `${db}.${schema}`;
                   const schemaNode = schemaNodes[key];
@@ -173,7 +173,7 @@ export function SnowflakeTableBrowser({ onSelectTable, selected }: SnowflakeTabl
                             <div className="px-2 py-1 text-xs text-text-muted">Loading tables…</div>
                           )}
                           {schemaNode.error && (
-                            <div className="px-2 py-1 text-xs text-red-300">{schemaNode.error}</div>
+                            <div className="px-2 py-1 text-xs text-red-600">{schemaNode.error}</div>
                           )}
                           {schemaNode.children?.map((table) => {
                             const tableKey = `${db}.${schema}.${table}`;

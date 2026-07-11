@@ -83,7 +83,7 @@ export function DataTable<T>({
   if (error) {
     return (
       <div className="rounded-xl border border-red-500/30 bg-bg-card p-10 text-center">
-        <p className="text-sm text-red-300">{error}</p>
+        <p className="text-sm text-red-600">{error}</p>
         {onRetry && (
           <button
             onClick={onRetry}

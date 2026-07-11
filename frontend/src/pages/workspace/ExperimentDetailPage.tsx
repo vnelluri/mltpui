@@ -84,7 +84,7 @@ export function ExperimentDetailPage() {
 
   if (error || !experiment) {
     return (
-      <div className="rounded-xl border border-red-500/30 bg-bg-card p-8 text-sm text-red-300">
+      <div className="rounded-xl border border-red-500/30 bg-bg-card p-8 text-sm text-red-600">
         {error ?? 'Experiment not found.'}
       </div>
     );
@@ -172,7 +172,7 @@ export function ExperimentDetailPage() {
                           <td
                             key={k}
                             className={`px-4 py-3 font-mono text-xs ${
-                              isBest ? 'font-semibold text-emerald-300' : 'text-text-primary'
+                              isBest ? 'font-semibold text-emerald-600' : 'text-text-primary'
                             }`}
                           >
                             {formatNumber(value)}

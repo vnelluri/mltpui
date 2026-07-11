@@ -76,7 +76,7 @@ export function DataScientistDashboard() {
       />
 
       {error && (
-        <div className="mb-6 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+        <div className="mb-6 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-700">
           {error}
         </div>
       )}
@@ -123,31 +123,28 @@ export function DataScientistDashboard() {
           )}
         </Card>
 
+        {/* Experiments are a PREVIEW feature — not part of this release, so
+            the panel is informational only (no navigation into it). */}
         <Card className="p-5">
           <div className="mb-4 flex items-center justify-between">
             <h3 className="text-sm font-semibold text-text-primary">My experiments</h3>
-            <Link to="/workspace/experiments" className="text-xs font-medium text-brand-purple hover:underline">
-              View all experiments →
-            </Link>
+            <span className="rounded-full border border-bg-elevated bg-bg-dark px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-text-muted">
+              Preview
+            </span>
           </div>
           {recentExperiments.length === 0 ? (
-            <EmptyState title="No experiments yet" description="Create an experiment to start tracking runs." />
+            <EmptyState title="No experiments yet" description="Experiment tracking arrives in a later release." />
           ) : (
             <ul className="space-y-3">
               {recentExperiments.map((exp) => (
-                <li key={exp.experimentId}>
-                  <Link
-                    to={`/workspace/experiments/${exp.experimentId}`}
-                    className="flex items-center justify-between gap-3 text-sm"
-                  >
-                    <div className="min-w-0">
-                      <p className="truncate font-medium text-text-primary">{exp.name}</p>
-                      <p className="text-xs text-text-muted">{formatRelative(exp.createdAt)}</p>
-                    </div>
-                    {exp.runCount !== undefined && (
-                      <span className="flex-shrink-0 text-xs text-text-muted">{exp.runCount} runs</span>
-                    )}
-                  </Link>
+                <li key={exp.experimentId} className="flex items-center justify-between gap-3 text-sm">
+                  <div className="min-w-0">
+                    <p className="truncate font-medium text-text-primary">{exp.name}</p>
+                    <p className="text-xs text-text-muted">{formatRelative(exp.createdAt)}</p>
+                  </div>
+                  {exp.runCount !== undefined && (
+                    <span className="flex-shrink-0 text-xs text-text-muted">{exp.runCount} runs</span>
+                  )}
                 </li>
               ))}
             </ul>

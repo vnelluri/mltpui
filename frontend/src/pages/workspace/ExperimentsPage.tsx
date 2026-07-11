@@ -73,8 +73,15 @@ export function ExperimentsPage() {
   return (
     <div>
       <PageHeader
-        title="Experiments"
-        description="Track and compare training runs across your models."
+        title={
+          <span className="flex items-center gap-3">
+            Experiments
+            <span className="rounded-full border border-bg-elevated bg-bg-dark px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-text-muted">
+              Preview
+            </span>
+          </span>
+        }
+        description="Preview — experiment tracking is not part of this release. This version covers training jobs only."
         actions={!isReadOnly && <Button onClick={() => setModalOpen(true)}>New experiment</Button>}
       />
 
@@ -107,7 +114,7 @@ export function ExperimentsPage() {
       >
         <div className="space-y-4">
           {formError && (
-            <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+            <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-700">
               {formError}
             </div>
           )}

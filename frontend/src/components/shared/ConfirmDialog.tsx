@@ -38,7 +38,7 @@ export function ConfirmDialog({
   const confirmClasses =
     tone === 'danger'
       ? 'bg-red-500 text-white hover:bg-red-600'
-      : 'bg-brand-purple text-brand-valhalla hover:bg-brand-purple/90';
+      : 'bg-brand-purple text-white hover:bg-brand-purple/90';
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">

@@ -31,7 +31,8 @@ export function LoginPage() {
           <h1 className="text-4xl font-semibold leading-tight text-white">
             Enterprise ML Training Platform
           </h1>
-          <p className="mt-4 text-brand-purple/90">
+          {/* On-dark periwinkle: this panel stays valhalla-dark in the light theme */}
+          <p className="mt-4 text-[#A6A3E0]/90">
             Submit training jobs, track experiments, and govern models across every
             business unit — with tenancy and access derived directly from Entra ID.
           </p>
@@ -57,7 +58,7 @@ export function LoginPage() {
           </p>
 
           {error && (
-            <div className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+            <div className="mt-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-700">
               {error}
             </div>
           )}

@@ -91,6 +91,21 @@ class ReviewDecision(str, Enum):
     PENDING = "pending"
 
 
+class ModelDevStatus(str, Enum):
+    """Where a model version sits in its development journey.
+
+    Derived, never stored: computed from the ModelVersion + its governance
+    reviews at read time (see routers/models.py::compute_dev_status), so it
+    can't drift out of sync with the underlying records.
+    """
+
+    INITIATED = "initiated"                # registered, training not attached yet
+    DEV_COMPLETE = "dev_complete"          # trained artifact + results attached
+    SUBMITTED_TO_MRM = "submitted_to_mrm"  # pending governance review
+    MRM_APPROVED = "mrm_approved"
+    MRM_REJECTED = "mrm_rejected"
+
+
 class SessionType(str, Enum):
     EMR_STUDIO = "emr_studio"
     SAGEMAKER_STUDIO = "sagemaker_studio"
@@ -137,6 +152,14 @@ class TrainingJob(BaseModel):
     userId: str
     name: str
     status: str = JobStatus.QUEUED.value
+    # WHY the job is in its current state — dispatch error, compute backend
+    # failure reason, or cancellation note. The first thing a data scientist
+    # asks about a failed job.
+    statusReason: Optional[str] = None
+    # The data snapshot date this run trains on (ISO date, defaults to the
+    # submission day). Cloning a job and changing only this date is the
+    # backfill/reproducibility workflow; the script receives it as AS_OF_DATE.
+    asOfDate: Optional[str] = None
     framework: str
     entryPointScript: str
     s3InputPath: Optional[str] = None
@@ -200,20 +223,36 @@ class ModelVersion(BaseModel):
     modelId: str
     tenantId: str
     name: str
-    version: int
+    # Free-form version string ("1", "1.0.3", "2024-Q1"); numeric strings
+    # keep numeric ordering in the sort key (see pad_version).
+    version: str
     stage: str = ModelStage.NONE.value
+    # The business use case this model serves — captured at registration
+    # (inception). Optional on the model for backward compatibility with
+    # records written before the field existed; required by the register API.
+    usecaseId: Optional[str] = None
     runId: Optional[str] = None
     framework: Optional[str] = None
     artifactUri: Optional[str] = None
     description: Optional[str] = None
-    inputSchema: Dict[str, Any] = Field(default_factory=dict)
-    outputSchema: Dict[str, Any] = Field(default_factory=dict)
+    # Single free-form schema document for the model's I/O contract
+    # (replaces the earlier separate input/output schemas — old records'
+    # inputSchema/outputSchema attributes are simply ignored on read).
+    modelSchema: Dict[str, Any] = Field(default_factory=dict)
+    # Evaluation results the data scientist submits with the artifact
+    # (metrics, test outcomes) — part of what MRM reviews.
+    results: Dict[str, Any] = Field(default_factory=dict)
+    # S3 URI of the model documentation package submitted for review.
+    documentationUri: Optional[str] = None
     hasExplainer: bool = False
     driftBaselineUri: Optional[str] = None
     registeredAt: str = Field(default_factory=utcnow_iso)
     registeredBy: Optional[str] = None
     promotedAt: Optional[str] = None
     promotedBy: Optional[str] = None
+    # ServiceNow change ticket recorded when the version is promoted to
+    # Production — deployment readiness is gated on change management.
+    snowTicketId: Optional[str] = None
 
 
 class GovernanceReview(BaseModel):
@@ -221,13 +260,17 @@ class GovernanceReview(BaseModel):
     modelId: str
     tenantId: str
     modelName: Optional[str] = None
-    modelVersion: Optional[int] = None
+    modelVersion: Optional[str] = None
     # Who requested the review (DS/TenantAdmin) vs who decided it (MRM).
     submittedBy: Optional[str] = None
     reviewedBy: Optional[str] = None
     decision: str = ReviewDecision.PENDING.value
     comments: Optional[str] = None
     conditions: Optional[str] = None
+    # Review artifacts MRM attaches when recording the decision (validation
+    # reports, test evidence, memo links) — the counterpart of the results
+    # the data scientist attached before submitting.
+    mrmArtifactUris: List[str] = Field(default_factory=list)
     createdAt: str = Field(default_factory=utcnow_iso)
     reviewedAt: Optional[str] = None
     expiresAt: Optional[str] = None
@@ -251,6 +294,10 @@ class NotebookSession(BaseModel):
     userId: str
     tenantId: Optional[str] = None
     sessionType: str
+    # Set when the session was launched in collaborative mode from a model
+    # registry row: everyone opening a notebook against the same use case
+    # lands in that use case's shared workspace.
+    usecaseId: Optional[str] = None
     # Returned ONCE in the launch response, never persisted — a presigned
     # URL is a credential; the stored record is metadata only (see
     # notebook_repo, which strips it on write).
@@ -311,9 +358,15 @@ class FeatureView(BaseModel):
 
 
 # ── Single-table key builders ────────────────────────────────────────────────
-def pad_version(version: int) -> str:
-    """Zero-pad a model version so lexical ordering matches numeric ordering."""
-    return f"{int(version):010d}"
+def pad_version(version: str | int) -> str:
+    """Key-encode a model version string.
+
+    Versions are free-form strings. Purely numeric ones ("7") are zero-padded
+    so the sort key's lexical ordering matches numeric ordering; anything else
+    ("1.0.3", "2024-Q1") is used verbatim and sorts lexically.
+    """
+    text = str(version).strip()
+    return f"{int(text):010d}" if text.isdigit() else text
 
 
 class Keys:
@@ -372,14 +425,14 @@ class Keys:
     # so two tenants registering the same model name get independent
     # lineages instead of appending versions into each other's.
     @staticmethod
-    def model_version(tenant_id: str, name: str, version: int) -> Dict[str, str]:
+    def model_version(tenant_id: str, name: str, version: str) -> Dict[str, str]:
         return {
             "PK": f"MODEL#{tenant_id}#{name}",
             "SK": f"VERSION#{pad_version(version)}",
         }
 
     @staticmethod
-    def model_version_gsi(tenant_id: str, stage: str, name: str, version: int, model_id: str) -> Dict[str, str]:
+    def model_version_gsi(tenant_id: str, stage: str, name: str, version: str, model_id: str) -> Dict[str, str]:
         return {
             "GSI1PK": f"MODEL_TENANT#{tenant_id}",
             "GSI1SK": f"STAGE#{stage}#{name}#{pad_version(version)}",

@@ -199,7 +199,7 @@ export function FeatureStorePage() {
       >
         <div className="space-y-4">
           {formError && (
-            <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-200">
+            <div className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-700">
               {formError}
             </div>
           )}
@@ -331,7 +331,7 @@ export function FeatureStorePage() {
                     <h4 className="text-xs font-semibold uppercase tracking-wide text-text-muted">
                       Real-time (online store)
                     </h4>
-                    <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-medium text-emerald-300">
+                    <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[11px] font-medium text-emerald-600">
                       {preview.online.latencyMs}ms
                     </span>
                   </div>

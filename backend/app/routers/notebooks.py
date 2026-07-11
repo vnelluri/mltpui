@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import uuid
-from typing import Any, Dict
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
@@ -23,6 +23,10 @@ _repo = NotebookRepository()
 class NotebookLaunchRequest(BaseModel):
     sessionType: str
     tenantId: str
+    # Launch in collaborative mode for a business use case (from a model
+    # registry row): everyone launching against the same use case shares one
+    # workspace instead of getting isolated personal sessions.
+    usecaseId: Optional[str] = None
 
 
 @router.post("/launch", response_model=NotebookSession, status_code=status.HTTP_201_CREATED)
@@ -38,12 +42,15 @@ async def launch_notebook(
         )
     enforce_tenant_access(user, body.tenantId)
 
-    url, expires_at = notebook_service.launch(body.sessionType, body.tenantId, user.userId)
+    url, expires_at = notebook_service.launch(
+        body.sessionType, body.tenantId, user.userId, usecase_id=body.usecaseId
+    )
     session = NotebookSession(
         sessionId=str(uuid.uuid4()),
         userId=user.userId,
         tenantId=body.tenantId,
         sessionType=body.sessionType,
+        usecaseId=body.usecaseId,
         presignedUrl=url,
         urlExpiresAt=expires_at,
         status="active",
@@ -55,7 +62,7 @@ async def launch_notebook(
         resource_type="NotebookSession",
         resource_id=session.sessionId,
         tenant_id=body.tenantId,
-        details={"sessionType": body.sessionType},
+        details={"sessionType": body.sessionType, "usecaseId": body.usecaseId},
         request=request,
     )
     return session

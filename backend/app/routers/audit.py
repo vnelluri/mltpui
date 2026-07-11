@@ -23,7 +23,10 @@ async def list_audit_events(
     action: Optional[str] = None,
     startDate: Optional[str] = None,
     endDate: Optional[str] = None,
-    user: CurrentUser = Depends(require_role("TenantAdmin")),
+    # DataScientist gets READ access to their own tenant's trail — the audit
+    # log is the paper trail of their registrations, reviews, and promotions
+    # (the tenant filter below scopes everything for non-platform admins).
+    user: CurrentUser = Depends(require_role("TenantAdmin", "DataScientist")),
 ) -> Dict[str, Any]:
     if userId:
         items, _ = _repo.list_by_user(userId, limit=1000)

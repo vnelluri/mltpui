@@ -89,6 +89,23 @@ class ExperimentRepository:
             return None
         return ExperimentRun(**strip_internal(items[0]))
 
+    def next_run_number(self, tenant_id: str) -> int:
+        """Next sequential number for human-friendly run ids (run-0001, …).
+
+        Run ids must be unique per TENANT (get_run_by_id resolves via the
+        RUN_TENANT GSI), so the counter is tenant-wide. Backed by an atomic
+        counter item (same pattern as JobRepository.next_job_number) —
+        DynamoDB's ADD is race-free and has no ordering/padding ceiling.
+        """
+        resp = self.table.update_item(
+            Key={"PK": f"COUNTER#run#{tenant_id}", "SK": f"COUNTER#run#{tenant_id}"},
+            UpdateExpression="ADD #n :one",
+            ExpressionAttributeNames={"#n": "n"},
+            ExpressionAttributeValues={":one": 1},
+            ReturnValues="UPDATED_NEW",
+        )
+        return int(resp["Attributes"]["n"])
+
     def count_runs(self, experiment_id: str) -> int:
         resp = self.table.query(
             KeyConditionExpression=Key("PK").eq(f"EXPERIMENT#{experiment_id}")

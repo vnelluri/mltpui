@@ -65,7 +65,7 @@ export function S3Browser({ onSelectPath, selectedPath }: S3BrowserProps) {
           <LoadingSpinner label="Loading…" size="sm" />
         </div>
       ) : error ? (
-        <div className="p-4 text-sm text-red-300">{error}</div>
+        <div className="p-4 text-sm text-red-600">{error}</div>
       ) : (
         <div className="max-h-72 overflow-y-auto p-2 font-mono text-sm">
           {folders.length === 0 && files.length === 0 && (

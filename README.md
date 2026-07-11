@@ -526,7 +526,9 @@ curl -s -X POST http://localhost:8000/jobs \
 curl -s -X POST http://localhost:8000/models \
   -H "Content-Type: application/json" \
   -d '{
+        "modelId": "MDL-1043",
         "name": "probability-of-default",
+        "usecaseId": "UC-1043",
         "tenantId": "tenant-risk-analytics",
         "framework": "xgboost",
         "artifactUri": "s3://ml-platform-artifacts/tenant-risk-analytics/models/risk-score-model/v2/model.pkl",
@@ -534,17 +536,25 @@ curl -s -X POST http://localhost:8000/models \
       }' | jq
 ```
 
-`artifactUri` must point at an existing S3 object/prefix and `runId` (optional)
-at an existing run in the tenant — the registry is what MRM reviews against,
-so both are verified whenever provided.
+`usecaseId` is required and must match `UC-####` (e.g. `UC-1043`) — every
+model is registered against a business use case (it also scopes collaborative
+notebook launches from the registry).
+`artifactUri` must point at an existing S3 object/prefix — the registry is
+what MRM reviews against, so it is verified whenever provided. The training
+`runId` is not part of registration; it is attached later via
+"Attach results".
 
-**Model lifecycle:** register the model **at inception** (name + framework,
-no run or artifact yet) → train → attach results
+**Model lifecycle:** register the model **at inception** (name + use case +
+framework, no run or artifact yet) → train → attach results
 (`PUT /models/{name}/versions/{ver}` with `artifactUri`, `runId`,
-description) → submit for MRM review. A review can only be requested once
-the artifact is attached, and the version is **locked** (409) while a review
-is pending or once it is approved — MRM reviews exactly the binary that was
-submitted. A rejected review unlocks the version for fixes.
+description) → submit for MRM review → MRM attaches its own review
+artifacts (`mrmArtifactUris`) with the decision. A review can only be
+requested once the artifact is attached, and the version is **locked** (409)
+while a review is pending or once it is approved — MRM reviews exactly the
+binary that was submitted. A rejected review unlocks the version for fixes.
+The model listing exposes the derived journey as `devStatus`
+(`initiated → dev_complete → submitted_to_mrm → mrm_approved/mrm_rejected`),
+which the registry renders as a per-row progress stepper.
 
 ```bash
 # After training completes: attach the trained binary + lineage
@@ -566,7 +576,7 @@ REVIEW_ID=$(curl -s -X POST http://localhost:8000/governance/reviews \
   -d '{
         "modelId": "<modelId from the registration response>",
         "modelName": "probability-of-default",
-        "modelVersion": 1,
+        "modelVersion": "1",
         "tenantId": "tenant-risk-analytics"
       }' | jq -r '.reviewId')
 

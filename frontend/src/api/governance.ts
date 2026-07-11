@@ -4,7 +4,7 @@ import type { Paginated, GovernanceReview, ReviewDecision } from '../types/platf
 export interface CreateReviewPayload {
   modelId: string;
   modelName?: string;
-  modelVersion?: number;
+  modelVersion?: string;
   tenantId?: string;
   comments?: string;
 }
@@ -13,6 +13,8 @@ export interface SubmitDecisionPayload {
   decision: Exclude<ReviewDecision, 'pending'>;
   comments: string;
   conditions: string;
+  /** MRM's own review artifacts, recorded alongside the decision. */
+  mrmArtifactUris?: string[];
 }
 
 export interface ListReviewsParams {
@@ -38,9 +40,9 @@ export const governanceApi = {
     const { data } = await apiClient.put<GovernanceReview>(`/governance/reviews/${id}`, payload);
     return data;
   },
-  async exportPackage(modelId: string, version: number): Promise<Record<string, unknown>> {
+  async exportPackage(modelId: string, version: string): Promise<Record<string, unknown>> {
     const { data } = await apiClient.get<Record<string, unknown>>(
-      `/governance/export/${encodeURIComponent(modelId)}/${version}`,
+      `/governance/export/${encodeURIComponent(modelId)}/${encodeURIComponent(version)}`,
     );
     return data;
   },

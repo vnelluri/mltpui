@@ -23,6 +23,7 @@ def build_model_card(
         "version": model.version,
         "tenantId": model.tenantId,
         "stage": model.stage,
+        "usecaseId": model.usecaseId,
         "framework": model.framework,
         "description": model.description,
         "artifactUri": model.artifactUri,
@@ -30,10 +31,10 @@ def build_model_card(
         "registeredBy": model.registeredBy,
         "promotedAt": model.promotedAt,
         "promotedBy": model.promotedBy,
-        "schema": {
-            "input": model.inputSchema,
-            "output": model.outputSchema,
-        },
+        "snowTicketId": model.snowTicketId,
+        "schema": model.modelSchema,
+        "results": model.results,
+        "documentationUri": model.documentationUri,
         "explainability": {
             "hasExplainer": model.hasExplainer,
             "driftBaselineUri": model.driftBaselineUri,
@@ -60,10 +61,13 @@ def build_model_card(
             "reviews": [
                 {
                     "reviewId": r.reviewId,
+                    "submittedBy": r.submittedBy,
+                    "createdAt": r.createdAt,
                     "reviewedBy": r.reviewedBy,
                     "decision": r.decision,
                     "comments": r.comments,
                     "conditions": r.conditions,
+                    "mrmArtifactUris": r.mrmArtifactUris,
                     "reviewedAt": r.reviewedAt,
                     "expiresAt": r.expiresAt,
                 }

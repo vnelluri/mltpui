@@ -44,7 +44,7 @@ export class ErrorBoundary extends Component<ErrorBoundaryProps, ErrorBoundarySt
             <p className="mt-2 text-sm text-text-secondary">{this.state.message || 'An unexpected error occurred.'}</p>
             <button
               onClick={this.handleReset}
-              className="mt-6 rounded-lg bg-brand-purple px-4 py-2 text-sm font-semibold text-brand-valhalla transition hover:bg-brand-purple/90"
+              className="mt-6 rounded-lg bg-brand-purple px-4 py-2 text-sm font-semibold text-white transition hover:bg-brand-purple/90"
             >
               Try again
             </button>

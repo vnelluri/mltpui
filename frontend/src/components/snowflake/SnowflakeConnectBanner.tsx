@@ -35,16 +35,16 @@ export function SnowflakeConnectBanner({ snowflake, className = '' }: SnowflakeC
           {state === 'connected' && (
             <span className="text-text-primary">
               Connected to Snowflake as{' '}
-              <span className="font-mono font-medium text-emerald-300">{status?.snowflakeUsername}</span>
+              <span className="font-mono font-medium text-emerald-600">{status?.snowflakeUsername}</span>
               {minutesRemaining !== null && (
                 <span className="ml-2 text-text-muted">· Expires in {minutesRemaining}m</span>
               )}
             </span>
           )}
           {state === 'not_connected' && <span className="text-text-primary">Not connected to Snowflake</span>}
-          {state === 'expired' && <span className="text-red-200">Snowflake session expired</span>}
+          {state === 'expired' && <span className="text-red-700">Snowflake session expired</span>}
           {state === 'unknown' && <span className="text-text-secondary">Checking Snowflake connection…</span>}
-          {error && <div className="mt-0.5 text-xs text-red-300">{error}</div>}
+          {error && <div className="mt-0.5 text-xs text-red-600">{error}</div>}
         </div>
       </div>
 

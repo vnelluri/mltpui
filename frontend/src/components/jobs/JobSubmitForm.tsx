@@ -1,15 +1,20 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { jobsApi, type SubmitJobPayload } from '../../api/jobs';
 import { extractErrorMessage } from '../../api/client';
 import { useSnowflake } from '../../hooks/useSnowflake';
+import { useTenantContext } from '../../hooks/useTenantContext';
+import { deriveOutputPath, localToday, swapDatedPrefix } from '../../lib/jobs';
 import { Button, Card, Field, Input, InlineAlert } from '../shared/ui';
 import { SnowflakeConnectBanner } from '../snowflake/SnowflakeConnectBanner';
 import { SnowflakeTableBrowser, type SnowflakeSelection } from '../snowflake/SnowflakeTableBrowser';
 import { S3Browser } from '../s3/S3Browser';
-import type { ComputeType, Framework, SnowflakePreview } from '../../types/platform';
+import type { ComputeType, Framework, SnowflakePreview, TrainingJob } from '../../types/platform';
 
-const STEPS = ['Compute', 'Framework', 'Data source', 'Script', 'Resources', 'Hyperparameters', 'Review'];
+// Four steps: everything a run NEEDS is on the happy path; resources and
+// hyperparameters have sensible defaults and live in the Script step's
+// collapsible "Advanced" section.
+const STEPS = ['Setup', 'Data source', 'Script', 'Review'];
 
 const COMPUTE_OPTIONS: { value: ComputeType; label: string; description: string }[] = [
   { value: 'emr_serverless', label: 'EMR Serverless', description: 'Spark-based distributed training, auto-scaling compute.' },
@@ -31,35 +36,74 @@ interface HyperparamRow {
 export function JobSubmitForm() {
   const navigate = useNavigate();
   const snowflake = useSnowflake();
-  const [step, setStep] = useState(0);
+  const { tenantId } = useTenantContext();
+  // "Clone" from the Jobs page: the wizard opens pre-filled with an existing
+  // job's configuration, landing on Review — tweak-and-resubmit in one click.
+  const clone = (useLocation().state as { cloneFrom?: TrainingJob } | null)?.cloneFrom;
+  const [step, setStep] = useState(clone ? STEPS.length - 1 : 0);
   const [submitting, setSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [advancedOpen, setAdvancedOpen] = useState(false);
 
-  const [name, setName] = useState('');
-  const [computeType, setComputeType] = useState<ComputeType>('emr_serverless');
-  const [framework, setFramework] = useState<Framework>('pytorch');
+  const [name, setName] = useState(clone?.name ?? '');
+  const [computeType, setComputeType] = useState<ComputeType>(clone?.computeType ?? 'emr_serverless');
+  const [framework, setFramework] = useState<Framework>(clone?.framework ?? 'pytorch');
+  // Data snapshot date: clone keeps the original (reproducibility); change it
+  // to backfill a different day. New jobs default to the LOCAL calendar day.
+  const [asOfDate, setAsOfDate] = useState(clone?.asOfDate ?? localToday());
 
-  const [dataTab, setDataTab] = useState<'snowflake' | 's3'>('snowflake');
-  const [snowflakeSelection, setSnowflakeSelection] = useState<SnowflakeSelection | null>(null);
+  const [dataTab, setDataTab] = useState<'snowflake' | 's3'>(
+    clone ? (clone.snowflakeDatabase ? 'snowflake' : 's3') : 'snowflake',
+  );
+  const [snowflakeSelection, setSnowflakeSelection] = useState<SnowflakeSelection | null>(
+    clone?.snowflakeDatabase
+      ? { database: clone.snowflakeDatabase, schema: clone.snowflakeSchema ?? '', table: clone.snowflakeTable ?? '' }
+      : null,
+  );
   const [snowflakePreview, setSnowflakePreview] = useState<SnowflakePreview | null>(null);
-  const [useCustomSql, setUseCustomSql] = useState(false);
-  const [customSql, setCustomSql] = useState('');
-  const [s3InputPath, setS3InputPath] = useState('');
+  const [useCustomSql, setUseCustomSql] = useState(!!clone?.snowflakeSql);
+  const [customSql, setCustomSql] = useState(clone?.snowflakeSql ?? '');
+  const [s3InputPath, setS3InputPath] = useState(clone?.s3InputPath ?? '');
 
-  const [entryPointScript, setEntryPointScript] = useState('');
-  const [s3OutputPath, setS3OutputPath] = useState('');
+  const [entryPointScript, setEntryPointScript] = useState(clone?.entryPointScript ?? '');
+  const [s3OutputPath, setS3OutputPath] = useState(clone?.s3OutputPath ?? '');
+  // Whether the output path is still ours to keep date-consistent. A cloned
+  // path that follows the dated-prefix convention stays LIVE (changing the
+  // as-of date must move the prefix, or a backfill would overwrite the
+  // original day's artifacts); only a custom cloned path — or a manual edit —
+  // freezes it.
+  const cloneHasDatedPath = !!(clone?.s3OutputPath && clone.asOfDate && clone.s3OutputPath.endsWith(`/${clone.asOfDate}/`));
+  const [outputEdited, setOutputEdited] = useState(!!clone?.s3OutputPath && !cloneHasDatedPath);
 
-  const [instanceType, setInstanceType] = useState('ml.m5.xlarge');
-  const [instanceCount, setInstanceCount] = useState(1);
-  const [volumeSizeGb, setVolumeSizeGb] = useState(30);
-  const [driverMemory, setDriverMemory] = useState('4g');
-  const [executorMemory, setExecutorMemory] = useState('4g');
-  const [maxExecutors, setMaxExecutors] = useState(4);
+  const [instanceType, setInstanceType] = useState(clone?.instanceType || 'ml.m5.xlarge');
+  const [instanceCount, setInstanceCount] = useState(clone?.instanceCount ?? 1);
+  const [volumeSizeGb, setVolumeSizeGb] = useState(clone?.volumeSizeGb ?? 30);
+  const [driverMemory, setDriverMemory] = useState(clone?.driverMemory ?? '4g');
+  const [executorMemory, setExecutorMemory] = useState(clone?.executorMemory ?? '4g');
+  const [maxExecutors, setMaxExecutors] = useState(clone?.maxExecutors ?? 4);
 
-  const [hyperparams, setHyperparams] = useState<HyperparamRow[]>([
-    { key: 'learning_rate', value: '0.001' },
-    { key: 'epochs', value: '10' },
-  ]);
+  const [hyperparams, setHyperparams] = useState<HyperparamRow[]>(
+    clone && Object.keys(clone.hyperparameters ?? {}).length
+      ? Object.entries(clone.hyperparameters).map(([key, value]) => ({ key, value: String(value) }))
+      : [
+          { key: 'learning_rate', value: '0.001' },
+          { key: 'epochs', value: '10' },
+        ],
+  );
+
+  // Keep the output path date-consistent (convention: each day's run lands in
+  // its own prefix instead of overwriting). Stops as soon as the user takes
+  // over the field. Cloned conventional paths keep their original BASE and
+  // only the date segment moves; fresh jobs derive fully from the name.
+  useEffect(() => {
+    if (outputEdited) return;
+    if (cloneHasDatedPath) {
+      setS3OutputPath(swapDatedPrefix(clone?.s3OutputPath, clone?.asOfDate, asOfDate));
+      return;
+    }
+    setS3OutputPath(deriveOutputPath(name, framework, tenantId, asOfDate));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [name, framework, tenantId, asOfDate, outputEdited]);
 
   const updateHyperparam = (idx: number, field: 'key' | 'value', value: string) => {
     setHyperparams((prev) => prev.map((row, i) => (i === idx ? { ...row, [field]: value } : row)));
@@ -70,12 +114,10 @@ export function JobSubmitForm() {
   const canGoNext = (() => {
     switch (step) {
       case 0:
-        return !!computeType;
+        return !!computeType && !!framework;
       case 1:
-        return !!framework;
-      case 2:
         return dataTab === 's3' ? !!s3InputPath : !!snowflakeSelection;
-      case 3:
+      case 2:
         return !!entryPointScript && !!s3OutputPath;
       default:
         return true;
@@ -100,6 +142,7 @@ export function JobSubmitForm() {
         name: name.trim() || `${framework}-job-${Date.now()}`,
         computeType,
         framework,
+        asOfDate: asOfDate || undefined,
         entryPointScript,
         s3InputPath: dataTab === 's3' ? s3InputPath : '',
         s3OutputPath,
@@ -145,7 +188,7 @@ export function JobSubmitForm() {
               disabled={i > step}
               className={`flex h-8 w-8 items-center justify-center rounded-full text-xs font-semibold transition ${
                 i === step
-                  ? 'bg-brand-purple text-brand-valhalla'
+                  ? 'bg-brand-purple text-white'
                   : i < step
                     ? 'bg-brand-purple/20 text-brand-purple'
                     : 'bg-bg-elevated text-text-muted'
@@ -163,56 +206,66 @@ export function JobSubmitForm() {
 
       <Card className="p-6">
         {step === 0 && (
-          <div>
-            <h3 className="mb-4 text-sm font-semibold text-text-primary">Choose a compute type</h3>
+          <div className="space-y-6">
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              {COMPUTE_OPTIONS.map((opt) => (
-                <button
-                  key={opt.value}
-                  onClick={() => setComputeType(opt.value)}
-                  className={`rounded-xl border p-5 text-left transition ${
-                    computeType === opt.value
-                      ? 'border-brand-purple bg-brand-purple/10'
-                      : 'border-bg-elevated hover:border-brand-purple/40'
-                  }`}
-                >
-                  <p className="text-sm font-semibold text-text-primary">{opt.label}</p>
-                  <p className="mt-1 text-xs text-text-secondary">{opt.description}</p>
-                </button>
-              ))}
+              <Field label="Job name" hint="Optional — auto-generated when empty. Also drives the default output path.">
+                <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. fraud-model-v3-retrain" />
+              </Field>
+              <Field
+                label="As-of date"
+                hint="The data snapshot date this run trains on — your script receives it as AS_OF_DATE. Change it to backfill a different day."
+              >
+                <Input type="date" value={asOfDate} onChange={(e) => setAsOfDate(e.target.value)} />
+              </Field>
+            </div>
+            <div>
+              <h3 className="mb-3 text-sm font-semibold text-text-primary">Compute type</h3>
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                {COMPUTE_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    onClick={() => setComputeType(opt.value)}
+                    className={`rounded-xl border p-5 text-left transition ${
+                      computeType === opt.value
+                        ? 'border-brand-purple bg-brand-purple/10'
+                        : 'border-bg-elevated hover:border-brand-purple/40'
+                    }`}
+                  >
+                    <p className="text-sm font-semibold text-text-primary">{opt.label}</p>
+                    <p className="mt-1 text-xs text-text-secondary">{opt.description}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div>
+              <h3 className="mb-3 text-sm font-semibold text-text-primary">Framework</h3>
+              <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
+                {FRAMEWORK_OPTIONS.map((opt) => (
+                  <button
+                    key={opt.value}
+                    onClick={() => setFramework(opt.value)}
+                    className={`rounded-xl border p-4 text-center transition ${
+                      framework === opt.value
+                        ? 'border-brand-purple bg-brand-purple/10 text-brand-purple'
+                        : 'border-bg-elevated text-text-secondary hover:border-brand-purple/40'
+                    }`}
+                  >
+                    <p className="text-sm font-semibold">{opt.label}</p>
+                  </button>
+                ))}
+              </div>
             </div>
           </div>
         )}
 
         {step === 1 && (
           <div>
-            <h3 className="mb-4 text-sm font-semibold text-text-primary">Choose a framework</h3>
-            <div className="grid grid-cols-2 gap-4 sm:grid-cols-4">
-              {FRAMEWORK_OPTIONS.map((opt) => (
-                <button
-                  key={opt.value}
-                  onClick={() => setFramework(opt.value)}
-                  className={`rounded-xl border p-5 text-center transition ${
-                    framework === opt.value
-                      ? 'border-brand-purple bg-brand-purple/10 text-brand-purple'
-                      : 'border-bg-elevated text-text-secondary hover:border-brand-purple/40'
-                  }`}
-                >
-                  <p className="text-sm font-semibold">{opt.label}</p>
-                </button>
-              ))}
-            </div>
-          </div>
-        )}
-
-        {step === 2 && (
-          <div>
             <h3 className="mb-4 text-sm font-semibold text-text-primary">Data source</h3>
             <div className="mb-4 flex gap-2">
               <button
                 onClick={() => setDataTab('snowflake')}
                 className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
-                  dataTab === 'snowflake' ? 'bg-brand-purple text-brand-valhalla' : 'bg-bg-elevated text-text-secondary'
+                  dataTab === 'snowflake' ? 'bg-brand-purple text-white' : 'bg-bg-elevated text-text-secondary'
                 }`}
               >
                 Snowflake
@@ -220,7 +273,7 @@ export function JobSubmitForm() {
               <button
                 onClick={() => setDataTab('s3')}
                 className={`rounded-lg px-4 py-2 text-sm font-medium transition ${
-                  dataTab === 's3' ? 'bg-brand-purple text-brand-valhalla' : 'bg-bg-elevated text-text-secondary'
+                  dataTab === 's3' ? 'bg-brand-purple text-white' : 'bg-bg-elevated text-text-secondary'
                 }`}
               >
                 S3
@@ -318,12 +371,9 @@ export function JobSubmitForm() {
           </div>
         )}
 
-        {step === 3 && (
+        {step === 2 && (
           <div className="space-y-4">
             <h3 className="mb-1 text-sm font-semibold text-text-primary">Script</h3>
-            <Field label="Job name">
-              <Input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. fraud-model-v3-retrain" />
-            </Field>
             <Field label="Entry point script (S3 path)" required>
               <Input
                 value={entryPointScript}
@@ -332,85 +382,112 @@ export function JobSubmitForm() {
                 className="font-mono"
               />
             </Field>
-            <Field label="Output S3 path" required>
+            <Field
+              label="Output S3 path"
+              required
+              hint="Defaulted from the job name — this is what “Add run” later attaches to a model."
+            >
               <Input
                 value={s3OutputPath}
-                onChange={(e) => setS3OutputPath(e.target.value)}
+                onChange={(e) => {
+                  setOutputEdited(true);
+                  setS3OutputPath(e.target.value);
+                }}
                 placeholder="s3://ml-platform-artifacts/tenant/models/run-1/"
                 className="font-mono"
               />
             </Field>
-          </div>
-        )}
 
-        {step === 4 && (
-          <div className="space-y-4">
-            <h3 className="mb-1 text-sm font-semibold text-text-primary">Resources</h3>
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
-              <Field label="Instance type">
-                <Input value={instanceType} onChange={(e) => setInstanceType(e.target.value)} />
-              </Field>
-              <Field label="Instance count">
-                <Input type="number" min={1} value={instanceCount} onChange={(e) => setInstanceCount(Number(e.target.value) || 1)} />
-              </Field>
-              <Field label="Volume size (GB)">
-                <Input type="number" min={10} value={volumeSizeGb} onChange={(e) => setVolumeSizeGb(Number(e.target.value) || 10)} />
-              </Field>
-            </div>
-            {computeType === 'emr_serverless' && (
-              <div className="grid grid-cols-1 gap-4 border-t border-bg-elevated pt-4 sm:grid-cols-3">
-                <Field label="Driver memory">
-                  <Input value={driverMemory} onChange={(e) => setDriverMemory(e.target.value)} placeholder="4g" />
-                </Field>
-                <Field label="Executor memory">
-                  <Input value={executorMemory} onChange={(e) => setExecutorMemory(e.target.value)} placeholder="4g" />
-                </Field>
-                <Field label="Max executors">
-                  <Input type="number" min={1} value={maxExecutors} onChange={(e) => setMaxExecutors(Number(e.target.value) || 1)} />
-                </Field>
-              </div>
-            )}
-          </div>
-        )}
-
-        {step === 5 && (
-          <div>
-            <div className="mb-4 flex items-center justify-between">
-              <h3 className="text-sm font-semibold text-text-primary">Hyperparameters</h3>
-              <Button variant="secondary" onClick={addHyperparam} className="!px-3 !py-1.5 !text-xs">
-                + Add row
-              </Button>
-            </div>
-            <div className="space-y-2">
-              {hyperparams.map((row, idx) => (
-                <div key={idx} className="flex gap-2">
-                  <Input
-                    value={row.key}
-                    onChange={(e) => updateHyperparam(idx, 'key', e.target.value)}
-                    placeholder="key"
-                    className="font-mono"
-                  />
-                  <Input
-                    value={row.value}
-                    onChange={(e) => updateHyperparam(idx, 'value', e.target.value)}
-                    placeholder="value"
-                    className="font-mono"
-                  />
-                  <Button variant="ghost" onClick={() => removeHyperparam(idx)} className="!px-3">
-                    ✕
-                  </Button>
+            {/* Resources + hyperparameters ship with sensible defaults — they
+                live behind "Advanced" so the happy path stays 3 clicks. */}
+            <div className="rounded-xl border border-bg-elevated">
+              <button
+                type="button"
+                onClick={() => setAdvancedOpen((o) => !o)}
+                className="flex w-full items-center justify-between px-4 py-3 text-sm font-medium text-text-secondary transition hover:text-text-primary"
+              >
+                <span>
+                  Advanced — resources & hyperparameters
+                  <span className="ml-2 text-xs text-text-muted">
+                    {instanceType} × {instanceCount} · {hyperparams.filter((h) => h.key).length} hyperparameter(s)
+                  </span>
+                </span>
+                <span className="text-xs">{advancedOpen ? '▲' : '▼'}</span>
+              </button>
+              {advancedOpen && (
+                <div className="space-y-4 border-t border-bg-elevated p-4">
+                  <div className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+                    <Field label="Instance type">
+                      <Input value={instanceType} onChange={(e) => setInstanceType(e.target.value)} />
+                    </Field>
+                    <Field label="Instance count">
+                      <Input type="number" min={1} value={instanceCount} onChange={(e) => setInstanceCount(Number(e.target.value) || 1)} />
+                    </Field>
+                    <Field label="Volume size (GB)">
+                      <Input type="number" min={10} value={volumeSizeGb} onChange={(e) => setVolumeSizeGb(Number(e.target.value) || 10)} />
+                    </Field>
+                  </div>
+                  {computeType === 'emr_serverless' && (
+                    <div className="grid grid-cols-1 gap-4 border-t border-bg-elevated pt-4 sm:grid-cols-3">
+                      <Field label="Driver memory">
+                        <Input value={driverMemory} onChange={(e) => setDriverMemory(e.target.value)} placeholder="4g" />
+                      </Field>
+                      <Field label="Executor memory">
+                        <Input value={executorMemory} onChange={(e) => setExecutorMemory(e.target.value)} placeholder="4g" />
+                      </Field>
+                      <Field label="Max executors">
+                        <Input type="number" min={1} value={maxExecutors} onChange={(e) => setMaxExecutors(Number(e.target.value) || 1)} />
+                      </Field>
+                    </div>
+                  )}
+                  <div className="border-t border-bg-elevated pt-4">
+                    <div className="mb-3 flex items-center justify-between">
+                      <p className="text-sm font-medium text-text-secondary">Hyperparameters</p>
+                      <Button variant="secondary" onClick={addHyperparam} className="!px-3 !py-1.5 !text-xs">
+                        + Add row
+                      </Button>
+                    </div>
+                    <div className="space-y-2">
+                      {hyperparams.map((row, idx) => (
+                        <div key={idx} className="flex gap-2">
+                          <Input
+                            value={row.key}
+                            onChange={(e) => updateHyperparam(idx, 'key', e.target.value)}
+                            placeholder="key"
+                            className="font-mono"
+                          />
+                          <Input
+                            value={row.value}
+                            onChange={(e) => updateHyperparam(idx, 'value', e.target.value)}
+                            placeholder="value"
+                            className="font-mono"
+                          />
+                          <Button variant="ghost" onClick={() => removeHyperparam(idx)} className="!px-3">
+                            ✕
+                          </Button>
+                        </div>
+                      ))}
+                      {hyperparams.length === 0 && (
+                        <p className="text-sm text-text-muted">No hyperparameters set.</p>
+                      )}
+                    </div>
+                  </div>
                 </div>
-              ))}
-              {hyperparams.length === 0 && (
-                <p className="text-sm text-text-muted">No hyperparameters set.</p>
               )}
             </div>
           </div>
         )}
 
-        {step === 6 && (
+        {step === 3 && (
           <div className="space-y-5">
             <h3 className="text-sm font-semibold text-text-primary">Review and submit</h3>
+
+            {clone && (
+              <InlineAlert tone="info">
+                Cloned from <span className="font-mono">{clone.jobId}</span> — everything is pre-filled;
+                use Back to tweak any step, then submit.
+              </InlineAlert>
+            )}
 
             {expiresSoon && (
               <InlineAlert tone="warn">
@@ -423,6 +500,7 @@ export function JobSubmitForm() {
 
             <dl className="grid grid-cols-1 gap-4 text-sm sm:grid-cols-2">
               <Row label="Job name" value={name || '(auto-generated)'} />
+              <Row label="As-of date" value={asOfDate || '(today)'} />
               <Row label="Compute type" value={computeType === 'emr_serverless' ? 'EMR Serverless' : 'SageMaker Training'} />
               <Row label="Framework" value={framework} />
               <Row

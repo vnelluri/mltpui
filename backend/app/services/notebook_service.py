@@ -20,12 +20,27 @@ class NotebookService:
         self.emr_mock = settings.EMR_MOCK_MODE
         self.sagemaker_mock = settings.SAGEMAKER_MOCK_MODE
 
-    def launch(self, session_type: str, tenant_id: str, user_id: str) -> tuple[str, str]:
-        """Return ``(presigned_url, expires_at_iso)`` for the requested session type."""
+    def launch(
+        self,
+        session_type: str,
+        tenant_id: str,
+        user_id: str,
+        usecase_id: str | None = None,
+    ) -> tuple[str, str]:
+        """Return ``(presigned_url, expires_at_iso)`` for the requested session type.
+
+        When ``usecase_id`` is given the session opens in collaborative mode:
+        the URL carries the use case as a fragment, which the Studio-side
+        bootstrap uses to land everyone working on that use case in the same
+        shared workspace. A fragment (not a query param) so it can never
+        invalidate a presigned URL's signature.
+        """
         if session_type == "sagemaker_studio":
             url = self.launch_sagemaker_studio(tenant_id, user_id)
         else:
             url = self.launch_emr_studio(tenant_id, user_id)
+        if usecase_id:
+            url = f"{url}#collab=usecase:{usecase_id}"
         expires_at = (
             datetime.now(timezone.utc) + timedelta(seconds=_SESSION_TTL_SECONDS)
         ).strftime("%Y-%m-%dT%H:%M:%S.%fZ")

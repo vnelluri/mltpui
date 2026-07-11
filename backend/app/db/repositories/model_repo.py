@@ -38,13 +38,13 @@ class ModelRepository:
         return mv
 
     def get_version(
-        self, tenant_id: str, name: str, version: int
+        self, tenant_id: str, name: str, version: str
     ) -> Optional[ModelVersion]:
         resp = self.table.get_item(Key=Keys.model_version(tenant_id, name, version))
         item = strip_internal(resp.get("Item"))
         return ModelVersion(**item) if item else None
 
-    def get_by_model_id(self, model_id: str, version: int) -> Optional[ModelVersion]:
+    def get_by_model_id(self, model_id: str, version: str) -> Optional[ModelVersion]:
         resp = self.table.query(
             IndexName="GSI2",
             KeyConditionExpression=Key("GSI2PK").eq(f"MODELID#{model_id}")
@@ -55,6 +55,15 @@ class ModelRepository:
             return None
         return ModelVersion(**strip_internal(items[0]))
 
+    def list_by_model_id(self, model_id: str) -> List[ModelVersion]:
+        """All versions registered under a Model ID (global — the key is not
+        tenant-scoped)."""
+        resp = self.table.query(
+            IndexName="GSI2",
+            KeyConditionExpression=Key("GSI2PK").eq(f"MODELID#{model_id}"),
+        )
+        return [ModelVersion(**strip_internal(i)) for i in resp.get("Items", [])]
+
     def list_versions(self, tenant_id: str, name: str) -> List[ModelVersion]:
         resp = self.table.query(
             KeyConditionExpression=Key("PK").eq(f"MODEL#{tenant_id}#{name}")
@@ -63,10 +72,18 @@ class ModelRepository:
         return [ModelVersion(**strip_internal(i)) for i in resp.get("Items", [])]
 
     def latest_version_number(self, tenant_id: str, name: str) -> int:
-        versions = self.list_versions(tenant_id, name)
-        if not versions:
-            return 0
-        return max(v.version for v in versions)
+        """Highest purely-numeric version for a model name (0 when none).
+
+        Versions are free-form strings; auto-increment ("next version") only
+        makes sense for the numeric ones — "1.0.3"-style versions are simply
+        ignored here and must be registered with an explicit version.
+        """
+        numeric = [
+            int(v.version)
+            for v in self.list_versions(tenant_id, name)
+            if str(v.version).isdigit()
+        ]
+        return max(numeric, default=0)
 
     def list_by_tenant(self, tenant_id: str) -> List[ModelVersion]:
         resp = self.table.query(

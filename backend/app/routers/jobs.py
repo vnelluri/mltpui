@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import logging
-import uuid
+import re
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import BaseModel
 
 from app.auth.models import CurrentUser
@@ -83,12 +83,13 @@ def _token_remaining_seconds(expires_at: str) -> int:
     return int((dt - datetime.now(timezone.utc)).total_seconds())
 
 
-def _mark_submit_failed(job: TrainingJob, secret_arn: Optional[str]) -> None:
+def _mark_submit_failed(job: TrainingJob, secret_arn: Optional[str], reason: str) -> None:
     """Best-effort cleanup when compute dispatch fails after the platform
     record was written: delete the token secret, mark the job (and its linked
-    run) failed. Never masks the original dispatch error."""
+    run) failed with the reason. Never masks the original dispatch error."""
     job_service.delete_job_token(secret_arn, job.tenantId)
     job.status = JobStatus.FAILED.value
+    job.statusReason = reason[:500]
     job.completedAt = job.completedAt or utcnow_iso()
     try:
         _job_repo.update(job)
@@ -126,6 +127,9 @@ class JobCreateRequest(BaseModel):
     tenantId: Optional[str] = None
     computeType: str
     framework: str
+    # Data snapshot date (YYYY-MM-DD); defaults to today. Passed to the
+    # training script as AS_OF_DATE — change it to backfill a different day.
+    asOfDate: Optional[str] = None
     entryPointScript: str
     s3InputPath: Optional[str] = None
     s3OutputPath: Optional[str] = None
@@ -178,13 +182,25 @@ async def submit_job(
     tenant = _resolve_target_tenant(body, user)
     tenant_id = tenant.tenantId
 
+    from datetime import date
+
+    as_of_date = (body.asOfDate or "").strip() or date.today().isoformat()
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", as_of_date):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="asOfDate must be an ISO date (YYYY-MM-DD).",
+        )
+
     job = TrainingJob(
-        jobId=str(uuid.uuid4()),
+        # Sequential, human-friendly id (job-0001, job-0002, … platform-wide)
+        # from an atomic counter — see JobRepository.next_job_number.
+        jobId=f"job-{_job_repo.next_job_number():04d}",
         tenantId=tenant_id,
         userId=user.userId,
         name=body.name,
         status=JobStatus.QUEUED.value,
         framework=body.framework,
+        asOfDate=as_of_date,
         entryPointScript=body.entryPointScript,
         s3InputPath=body.s3InputPath,
         s3OutputPath=body.s3OutputPath,
@@ -242,8 +258,12 @@ async def submit_job(
     # row in Experiments — the training script can enrich it later via
     # PUT /experiments/{id}/runs/{runId}/metrics|params|tags.
     experiment = _get_or_create_default_experiment(tenant_id, user)
+    # Sequential, human-friendly run id (run-0001, run-0002, … per tenant)
+    # instead of a UUID — this is the id data scientists see and reference
+    # (model lineage). Allocated from an atomic counter, so no collisions
+    # and no retry loop.
     run = ExperimentRun(
-        runId=str(uuid.uuid4()),
+        runId=f"run-{_exp_repo.next_run_number(tenant_id):04d}",
         experimentId=experiment.experimentId,
         tenantId=tenant_id,
         jobId=job.jobId,
@@ -278,12 +298,12 @@ async def submit_job(
         secret_arn = job_service.store_job_secret(job.jobId, tenant_id, secret_payload)
         job = job_service.submit(job, tenant, secret_arn)
     except TenantNotProvisionedError as exc:
-        _mark_submit_failed(job, secret_arn)
+        _mark_submit_failed(job, secret_arn, str(exc))
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT, detail=str(exc)
         ) from exc
     except Exception as exc:
-        _mark_submit_failed(job, secret_arn)
+        _mark_submit_failed(job, secret_arn, f"Dispatch to the compute backend failed: {exc}")
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Failed to dispatch job to the compute backend: {exc}",
@@ -306,7 +326,9 @@ async def submit_job(
 async def list_jobs(
     page: int = 1,
     pageSize: int = 20,
-    status_filter: Optional[str] = None,
+    # Aliased: the module already imports fastapi.status, so the parameter
+    # can't be named `status` — but ?status=… is what clients send.
+    status_filter: Optional[str] = Query(default=None, alias="status"),
     framework: Optional[str] = None,
     computeType: Optional[str] = None,
     user: CurrentUser = Depends(get_current_user),

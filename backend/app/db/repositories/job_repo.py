@@ -28,6 +28,23 @@ class JobRepository:
         )
         return job
 
+    def next_job_number(self) -> int:
+        """Next sequential number for human-friendly job ids (job-0001, …).
+
+        Job ids are the GLOBAL primary key (JOB#<id>, no tenant component),
+        so the sequence is platform-wide. Backed by an atomic counter item —
+        DynamoDB's ADD is race-free, so concurrent submissions can never be
+        handed the same number.
+        """
+        resp = self.table.update_item(
+            Key={"PK": "COUNTER#job", "SK": "COUNTER#job"},
+            UpdateExpression="ADD #n :one",
+            ExpressionAttributeNames={"#n": "n"},
+            ExpressionAttributeValues={":one": 1},
+            ReturnValues="UPDATED_NEW",
+        )
+        return int(resp["Attributes"]["n"])
+
     def get(self, job_id: str) -> Optional[TrainingJob]:
         resp = self.table.get_item(Key=Keys.job(job_id))
         item = strip_internal(resp.get("Item"))

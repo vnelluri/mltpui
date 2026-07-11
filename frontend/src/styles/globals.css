@@ -4,16 +4,17 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Light theme — keep in sync with tailwind.config.ts */
 :root {
-  --brand-purple: #a6a3e0;
+  --brand-purple: #6c63c5;
   --brand-valhalla: #2e1a47;
   --brand-white: #ffffff;
-  --bg-dark: #0a0614;
-  --bg-card: #120d22;
-  --bg-elevated: #1a1230;
-  --text-primary: #f0eeff;
-  --text-secondary: #9b94c0;
-  --text-muted: #5a5280;
+  --bg-dark: #f4f3fa;
+  --bg-card: #ffffff;
+  --bg-elevated: #e8e5f2;
+  --text-primary: #241e3d;
+  --text-secondary: #5a5280;
+  --text-muted: #8d86ad;
 }
 
 html,
@@ -37,14 +38,14 @@ body {
   height: 10px;
 }
 ::-webkit-scrollbar-track {
-  background: #0a0614;
+  background: #f4f3fa;
 }
 ::-webkit-scrollbar-thumb {
-  background: #2e1a47;
+  background: #cfcae6;
   border-radius: 6px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #3d2560;
+  background: #a6a3e0;
 }
 
 /* Grid pattern used on the login left panel */
@@ -55,7 +56,8 @@ body {
   background-size: 32px 32px;
 }
 
-/* Make the dark Truist wordmark render white on dark surfaces */
+/* Make the dark Truist wordmark render white on dark surfaces (the login
+   hero — the one surface that stays brand-valhalla in the light theme) */
 .logo-invert {
   filter: brightness(0) invert(1);
 }
@@ -69,5 +71,5 @@ body {
 input,
 select,
 textarea {
-  color-scheme: dark;
+  color-scheme: light;
 }

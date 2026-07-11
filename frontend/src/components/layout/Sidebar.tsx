@@ -7,6 +7,9 @@ interface NavItem {
   to: string;
   label: string;
   icon: JSX.Element;
+  /** Feature preview, not part of this release — rendered disabled with a
+   * "Preview" chip instead of a link. */
+  preview?: boolean;
 }
 
 const icon = (d: string) => (
@@ -41,7 +44,7 @@ function itemsForRole(role: string | null | undefined): NavItem[] {
         { to: '/admin', label: 'Dashboard', icon: ICONS.dashboard },
         { to: '/workspace/models', label: 'Models', icon: ICONS.models },
         { to: '/workspace/jobs', label: 'Jobs', icon: ICONS.jobs },
-        { to: '/workspace/experiments', label: 'Experiments', icon: ICONS.experiments },
+        { to: '/workspace/experiments', label: 'Experiments', icon: ICONS.experiments, preview: true },
         { to: '/feature-store', label: 'Feature Store', icon: ICONS.features },
         { to: '/snowflake', label: 'Snowflake', icon: ICONS.snowflake },
         { to: '/admin/tenants', label: 'Tenants', icon: ICONS.tenants },
@@ -54,7 +57,7 @@ function itemsForRole(role: string | null | undefined): NavItem[] {
         { to: '/tenant', label: 'Dashboard', icon: ICONS.dashboard },
         { to: '/workspace/models', label: 'Models', icon: ICONS.models },
         { to: '/workspace/jobs', label: 'Jobs', icon: ICONS.jobs },
-        { to: '/workspace/experiments', label: 'Experiments', icon: ICONS.experiments },
+        { to: '/workspace/experiments', label: 'Experiments', icon: ICONS.experiments, preview: true },
         { to: '/feature-store', label: 'Feature Store', icon: ICONS.features },
         { to: '/snowflake', label: 'Snowflake', icon: ICONS.snowflake },
         { to: '/tenant/settings', label: 'Settings', icon: ICONS.settings },
@@ -66,16 +69,17 @@ function itemsForRole(role: string | null | undefined): NavItem[] {
         { to: '/workspace', label: 'Dashboard', icon: ICONS.dashboard },
         { to: '/workspace/models', label: 'Models', icon: ICONS.models },
         { to: '/workspace/jobs', label: 'Jobs', icon: ICONS.jobs },
-        { to: '/workspace/experiments', label: 'Experiments', icon: ICONS.experiments },
+        { to: '/workspace/experiments', label: 'Experiments', icon: ICONS.experiments, preview: true },
         { to: '/feature-store', label: 'Feature Store', icon: ICONS.features },
         { to: '/snowflake', label: 'Snowflake', icon: ICONS.snowflake },
         { to: '/workspace/notebook', label: 'Notebook', icon: ICONS.notebook },
+        { to: '/audit', label: 'Audit Log', icon: ICONS.audit },
       ];
     case 'MRM':
       return [
         { to: '/governance', label: 'Governance', icon: ICONS.governance },
         { to: '/workspace/models', label: 'Models', icon: ICONS.models },
-        { to: '/workspace/experiments', label: 'Experiments', icon: ICONS.experiments },
+        { to: '/workspace/experiments', label: 'Experiments', icon: ICONS.experiments, preview: true },
         { to: '/feature-store', label: 'Feature Store', icon: ICONS.features },
       ];
     default:
@@ -88,43 +92,58 @@ export function Sidebar() {
   const items = itemsForRole(user?.role);
 
   return (
-    <aside className="flex h-screen w-64 flex-shrink-0 flex-col border-r border-black/20 bg-brand-valhalla">
+    <aside className="flex h-screen w-64 flex-shrink-0 flex-col border-r border-bg-elevated bg-bg-card">
       <div className="flex items-center gap-3 px-5 py-6">
         <img src="/truist-logo.svg" alt="Truist" className="h-8 w-8" />
         <div>
-          <p className="text-sm font-semibold text-white">Truist ML Platform</p>
-          <p className="text-[11px] text-brand-purple/80">Enterprise Training</p>
+          <p className="text-sm font-semibold text-text-primary">Truist ML Platform</p>
+          <p className="text-[11px] text-brand-purple">Enterprise Training</p>
         </div>
       </div>
 
       <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-2">
-        {items.map((item) => (
-          <NavLink
-            key={item.to}
-            to={item.to}
-            end={item.to === '/admin' || item.to === '/tenant' || item.to === '/workspace'}
-            className={({ isActive }) =>
-              `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
-                isActive
-                  ? 'bg-brand-purple text-brand-valhalla'
-                  : 'text-white/70 hover:bg-white/5 hover:text-white'
-              }`
-            }
-          >
-            {item.icon}
-            {item.label}
-          </NavLink>
-        ))}
+        {items.map((item) =>
+          item.preview ? (
+            // Preview feature — not part of this release; visible but disabled.
+            <span
+              key={item.to}
+              title={`${item.label} is a preview and not part of this release.`}
+              className="flex cursor-not-allowed items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium text-text-muted opacity-70"
+            >
+              {item.icon}
+              {item.label}
+              <span className="ml-auto rounded-full border border-bg-elevated bg-bg-dark px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wider text-text-muted">
+                Preview
+              </span>
+            </span>
+          ) : (
+            <NavLink
+              key={item.to}
+              to={item.to}
+              end={item.to === '/admin' || item.to === '/tenant' || item.to === '/workspace'}
+              className={({ isActive }) =>
+                `flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm font-medium transition ${
+                  isActive
+                    ? 'bg-brand-purple text-white'
+                    : 'text-text-secondary hover:bg-bg-elevated hover:text-text-primary'
+                }`
+              }
+            >
+              {item.icon}
+              {item.label}
+            </NavLink>
+          ),
+        )}
       </nav>
 
-      <div className="border-t border-white/10 px-4 py-4">
+      <div className="border-t border-bg-elevated px-4 py-4">
         <div className="mb-3 flex items-center gap-3">
-          <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-brand-purple/20 text-sm font-semibold text-brand-purple">
+          <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-brand-purple/15 text-sm font-semibold text-brand-purple">
             {(user?.name ?? '?').charAt(0).toUpperCase()}
           </div>
           <div className="min-w-0">
-            <p className="truncate text-sm font-medium text-white">{user?.name}</p>
-            <p className="truncate text-xs text-white/50">{user?.email}</p>
+            <p className="truncate text-sm font-medium text-text-primary">{user?.name}</p>
+            <p className="truncate text-xs text-text-muted">{user?.email}</p>
           </div>
         </div>
         {user && (
@@ -132,7 +151,7 @@ export function Sidebar() {
         )}
         <button
           onClick={() => void logout()}
-          className="w-full rounded-lg border border-white/10 px-3 py-2 text-xs font-medium text-white/70 transition hover:bg-white/5 hover:text-white"
+          className="w-full rounded-lg border border-bg-elevated px-3 py-2 text-xs font-medium text-text-secondary transition hover:bg-bg-elevated hover:text-text-primary"
         >
           Sign out
         </button>

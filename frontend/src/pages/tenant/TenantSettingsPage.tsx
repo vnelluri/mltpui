@@ -71,7 +71,7 @@ export function TenantSettingsPage() {
 
   if (!tenant) {
     return (
-      <div className="rounded-xl border border-red-500/30 bg-bg-card p-8 text-sm text-red-300">
+      <div className="rounded-xl border border-red-500/30 bg-bg-card p-8 text-sm text-red-600">
         {error ?? 'No tenant assigned.'}
       </div>
     );
@@ -83,7 +83,7 @@ export function TenantSettingsPage() {
 
       <Card className="max-w-xl p-6">
         {error && (
-          <div className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-200">
+          <div className="mb-4 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-700">
             {error}
           </div>
         )}

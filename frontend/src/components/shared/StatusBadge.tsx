@@ -1,10 +1,10 @@
 type Tone = 'green' | 'amber' | 'red' | 'blue' | 'purple' | 'gray';
 
 const TONE_CLASSES: Record<Tone, string> = {
-  green: 'bg-emerald-500/15 text-emerald-300 border-emerald-500/30',
-  amber: 'bg-amber-500/15 text-amber-300 border-amber-500/30',
-  red: 'bg-red-500/15 text-red-300 border-red-500/30',
-  blue: 'bg-sky-500/15 text-sky-300 border-sky-500/30',
+  green: 'bg-emerald-500/15 text-emerald-600 border-emerald-500/30',
+  amber: 'bg-amber-500/15 text-amber-600 border-amber-500/30',
+  red: 'bg-red-500/15 text-red-600 border-red-500/30',
+  blue: 'bg-sky-500/15 text-sky-600 border-sky-500/30',
   purple: 'bg-brand-purple/15 text-brand-purple border-brand-purple/30',
   gray: 'bg-bg-elevated text-text-secondary border-bg-elevated',
 };

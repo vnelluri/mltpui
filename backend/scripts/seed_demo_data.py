@@ -261,29 +261,55 @@ def seed_models(
         ("fraud-detector", 3, ModelStage.PRODUCTION.value),
         ("churn-predictor", 1, ModelStage.ARCHIVED.value),
     ]
+    # Format UC-#### — matches the register endpoint's validation.
+    usecases = {
+        "risk-score-model": "UC-1043",  # credit risk scoring
+        "fraud-detector": "UC-2088",  # card fraud detection
+        "churn-predictor": "UC-3110",  # customer churn
+    }
+    # ONE Model ID per model name, shared by all its versions — the register
+    # endpoint enforces this lineage binding, so seeds must honor it too.
+    lineage_ids = {
+        "risk-score-model": "MDL-1043",
+        "fraud-detector": "MDL-2088",
+        "churn-predictor": "MDL-3110",
+    }
     model_ids = {}
     for name, version, stage in stage_plan:
         exp_id, tenant_id = best[name]
         run = all_runs[exp_id][version % len(all_runs[exp_id])]
-        model_id = f"demo-model-{name}-v{version}"
+        model_id = lineage_ids[name]
         model_ids[(name, version)] = (model_id, tenant_id)
         mv = ModelVersion(
             modelId=model_id,
             tenantId=tenant_id,
             name=name,
-            version=version,
+            version=str(version),
             stage=stage,
+            usecaseId=usecases[name],
             runId=run.runId,
             framework=run.tags.get("framework", "xgboost"),
             artifactUri=run.artifactUri,
             description=f"{name} version {version}, seeded for local development.",
-            inputSchema={"features": ["feature_1", "feature_2", "feature_3"]},
-            outputSchema={"prediction": "float", "probability": "float"},
+            modelSchema={
+                "features": ["feature_1", "feature_2", "feature_3"],
+                "prediction": "float",
+                "probability": "float",
+            },
+            results={
+                "auc": round(run.metrics.get("auc", 0.9), 4),
+                "f1": round(run.metrics.get("f1", 0.85), 4),
+                "psi": round(run.metrics.get("psi", 0.02), 4),
+            },
+            documentationUri=(
+                f"{run.artifactUri}model-documentation.pdf" if stage != "None" else None
+            ),
             hasExplainer=version % 2 == 0,
             driftBaselineUri=f"{run.artifactUri}drift_baseline.json" if stage != "None" else None,
             registeredBy=USER_DS_RA_1 if tenant_id == "tenant-risk-analytics" else USER_DS_FD_1,
             promotedAt=utcnow_iso() if stage in {"Staging", "Production", "Archived"} else None,
             promotedBy=USER_TENANTADMIN_RA if tenant_id == "tenant-risk-analytics" else USER_TENANTADMIN_FD,
+            snowTicketId="CHG0042077" if stage == "Production" else None,
         )
         _try_create("models", repo.create, mv)
     return model_ids
@@ -300,11 +326,16 @@ def seed_governance_reviews(
         modelId=prod_model_id,
         tenantId=prod_tenant,
         modelName="fraud-detector",
-        modelVersion=3,
+        modelVersion="3",
+        submittedBy=USER_DS_FD_1,
         reviewedBy=USER_MRM,
         decision=ReviewDecision.APPROVED.value,
         comments="Model meets fairness and stability thresholds. Approved for Production.",
         conditions="Re-review required after 90 days or a PSI drift alert.",
+        mrmArtifactUris=[
+            f"s3://ml-platform-artifacts/{prod_tenant}/mrm/fraud-detector-v3/validation-report.pdf",
+            f"s3://ml-platform-artifacts/{prod_tenant}/mrm/fraud-detector-v3/challenger-benchmark.xlsx",
+        ],
         reviewedAt=utcnow_iso(),
         expiresAt=_iso(datetime.now(timezone.utc) + timedelta(days=90)),
     )
@@ -315,7 +346,8 @@ def seed_governance_reviews(
         modelId=staging_model_id,
         tenantId=staging_tenant,
         modelName="risk-score-model",
-        modelVersion=2,
+        modelVersion="2",
+        submittedBy=USER_DS_RA_1,
         reviewedBy=None,
         decision=ReviewDecision.PENDING.value,
         comments=None,

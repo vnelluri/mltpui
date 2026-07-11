@@ -8,6 +8,14 @@ export type ComputeType = 'emr_serverless' | 'sagemaker';
 export type Framework = 'pytorch' | 'tensorflow' | 'sklearn' | 'xgboost';
 export type ModelStage = 'None' | 'Staging' | 'Production' | 'Archived';
 export type ReviewDecision = 'approved' | 'rejected' | 'pending';
+/** Derived development-journey status, computed by the backend model listing
+ * (see routers/models.py::compute_dev_status) — never stored. */
+export type ModelDevStatus =
+  | 'initiated'
+  | 'dev_complete'
+  | 'submitted_to_mrm'
+  | 'mrm_approved'
+  | 'mrm_rejected';
 export type SessionType = 'emr_studio' | 'sagemaker_studio';
 export type NotebookStatus = 'active' | 'expired';
 // Mirrors JobStatus — every run's status is synced from the job that
@@ -75,6 +83,11 @@ export interface TrainingJob {
   userId: string;
   name: string;
   status: JobStatus;
+  /** Why the job is in its current state (failure reason, cancellation). */
+  statusReason?: string | null;
+  /** Data snapshot date (YYYY-MM-DD) the run trains on — AS_OF_DATE in the
+   * script; clone with a different date to backfill. */
+  asOfDate?: string | null;
   framework: Framework;
   entryPointScript: string;
   s3InputPath: string;
@@ -133,29 +146,42 @@ export interface ModelVersion {
   modelId: string;
   tenantId: string;
   name: string;
-  version: number;
+  version: string;
   stage: ModelStage;
+  /** Business use case the model was registered against (required at
+   * registration; may be absent on records that predate the field). */
+  usecaseId?: string | null;
+  /** Present on list responses only — derived from the version + its
+   * governance reviews at read time. */
+  devStatus?: ModelDevStatus;
   runId: string;
   framework: Framework;
   artifactUri: string;
   description: string;
-  inputSchema: Record<string, unknown>;
-  outputSchema: Record<string, unknown>;
+  /** Single free-form I/O contract document (replaces input/output schemas). */
+  modelSchema: Record<string, unknown>;
+  /** Evaluation results submitted with the artifact — reviewed by MRM. */
+  results: Record<string, unknown>;
+  /** S3 URI of the model documentation package. */
+  documentationUri?: string | null;
   hasExplainer: boolean;
   driftBaselineUri: string;
   registeredAt: string;
   registeredBy: string;
   promotedAt?: string | null;
   promotedBy?: string | null;
+  /** ServiceNow change ticket recorded on promotion to Production. */
+  snowTicketId?: string | null;
 }
 
 /** Mirrors backend build_model_card (services/model_card_service.py). */
 export interface ModelCard {
   modelId: string;
   name: string;
-  version: number;
+  version: string;
   tenantId: string;
   stage: ModelStage;
+  usecaseId: string | null;
   framework: string | null;
   description: string | null;
   artifactUri: string | null;
@@ -163,10 +189,10 @@ export interface ModelCard {
   registeredBy: string | null;
   promotedAt: string | null;
   promotedBy: string | null;
-  schema: {
-    input: Record<string, unknown>;
-    output: Record<string, unknown>;
-  };
+  snowTicketId: string | null;
+  schema: Record<string, unknown>;
+  results: Record<string, unknown>;
+  documentationUri: string | null;
   explainability: {
     hasExplainer: boolean;
     driftBaselineUri: string | null;
@@ -198,10 +224,13 @@ export interface GovernanceReview {
   decision: ReviewDecision;
   comments: string;
   conditions: string;
+  /** Artifacts MRM attaches alongside the decision (reports, evidence, memos). */
+  mrmArtifactUris?: string[];
+  createdAt?: string;
   reviewedAt: string | null;
   expiresAt: string | null;
   modelName?: string;
-  modelVersion?: number;
+  modelVersion?: string;
 }
 
 export interface AuditEvent {
@@ -222,6 +251,8 @@ export interface NotebookSession {
   userId: string;
   tenantId: string;
   sessionType: SessionType;
+  /** Set when launched in collaborative mode for a business use case. */
+  usecaseId?: string | null;
   /** Present only in the launch response — never persisted or re-listed. */
   presignedUrl: string | null;
   urlExpiresAt: string;

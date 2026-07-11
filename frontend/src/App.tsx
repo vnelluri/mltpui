@@ -227,7 +227,7 @@ export default function App() {
       <Route
         path="/audit"
         element={
-          <RequireAuth roles={['PlatformAdmin', 'TenantAdmin']}>
+          <RequireAuth roles={['PlatformAdmin', 'TenantAdmin', 'DataScientist']}>
             <Layout title="Audit Log">
               <AuditLogPage />
             </Layout>

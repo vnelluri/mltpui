@@ -213,6 +213,11 @@ class JobService:
             "ML_PLATFORM_JOB_ID": job.jobId,
             "ML_PLATFORM_TENANT_ID": job.tenantId,
         }
+        # The data snapshot date this run trains on — the well-known parameter
+        # training scripts filter their query/partition by (backfill: clone
+        # the job with a different date).
+        if job.asOfDate:
+            env["AS_OF_DATE"] = job.asOfDate
         # Everything the training code needs to log metrics back: which run
         # it is, where the API lives, and where its run token waits.
         if job.experimentId:
@@ -306,12 +311,19 @@ class JobService:
                 )
                 state = resp["jobRun"]["state"]
                 job.status = self._map_emr_state(state)
+                # Surface WHY it failed — the first thing a DS asks.
+                if job.status == JobStatus.FAILED.value:
+                    details = resp["jobRun"].get("stateDetails")
+                    if details:
+                        job.statusReason = str(details)[:500]
             elif job.computeType == "sagemaker" and job.sagemakerTrainingJobName:
                 client = dataplane_client("sagemaker", job.tenantId)
                 resp = client.describe_training_job(
                     TrainingJobName=job.sagemakerTrainingJobName
                 )
                 job.status = self._map_sagemaker_state(resp["TrainingJobStatus"])
+                if job.status == JobStatus.FAILED.value and resp.get("FailureReason"):
+                    job.statusReason = str(resp["FailureReason"])[:500]
         except Exception:
             # If polling fails, keep the last known status.
             pass
@@ -368,6 +380,7 @@ class JobService:
             except Exception:
                 pass
         job.status = JobStatus.CANCELLED.value
+        job.statusReason = "Cancelled by user."
         job.completedAt = utcnow_iso()
         # Clean up any Snowflake token secret.
         self.delete_job_token(job.snowflakeSecretArn, job.tenantId)

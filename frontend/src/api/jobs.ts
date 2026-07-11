@@ -5,6 +5,8 @@ export interface SubmitJobPayload {
   name: string;
   computeType: ComputeType;
   framework: Framework;
+  /** Data snapshot date (YYYY-MM-DD); the backend defaults it to today. */
+  asOfDate?: string;
   entryPointScript: string;
   s3InputPath: string;
   s3OutputPath: string;
