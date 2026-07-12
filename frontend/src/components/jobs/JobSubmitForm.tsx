@@ -5,7 +5,7 @@ import { extractErrorMessage } from '../../api/client';
 import { useSnowflake } from '../../hooks/useSnowflake';
 import { useTenantContext } from '../../hooks/useTenantContext';
 import { deriveOutputPath, localToday, swapDatedPrefix } from '../../lib/jobs';
-import { Button, Card, Field, Input, InlineAlert } from '../shared/ui';
+import { Button, Card, ChevronIcon, Field, Input, InlineAlert, XIcon } from '../shared/ui';
 import { SnowflakeConnectBanner } from '../snowflake/SnowflakeConnectBanner';
 import { SnowflakeTableBrowser, type SnowflakeSelection } from '../snowflake/SnowflakeTableBrowser';
 import { S3Browser } from '../s3/S3Browser';
@@ -412,7 +412,7 @@ export function JobSubmitForm() {
                     {instanceType} × {instanceCount} · {hyperparams.filter((h) => h.key).length} hyperparameter(s)
                   </span>
                 </span>
-                <span className="text-xs">{advancedOpen ? '▲' : '▼'}</span>
+                <ChevronIcon open={advancedOpen} />
               </button>
               {advancedOpen && (
                 <div className="space-y-4 border-t border-bg-elevated p-4">
@@ -454,16 +454,23 @@ export function JobSubmitForm() {
                             value={row.key}
                             onChange={(e) => updateHyperparam(idx, 'key', e.target.value)}
                             placeholder="key"
+                            aria-label="Hyperparameter key"
                             className="font-mono"
                           />
                           <Input
                             value={row.value}
                             onChange={(e) => updateHyperparam(idx, 'value', e.target.value)}
                             placeholder="value"
+                            aria-label="Hyperparameter value"
                             className="font-mono"
                           />
-                          <Button variant="ghost" onClick={() => removeHyperparam(idx)} className="!px-3">
-                            ✕
+                          <Button
+                            variant="ghost"
+                            onClick={() => removeHyperparam(idx)}
+                            className="!px-3"
+                            aria-label="Remove hyperparameter"
+                          >
+                            <XIcon size={16} />
                           </Button>
                         </div>
                       ))}

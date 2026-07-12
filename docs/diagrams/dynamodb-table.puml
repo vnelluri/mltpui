@@ -1,0 +1,105 @@
+@startuml dynamodb-table
+title DynamoDB Single-Table Design — table "ml-platform" (backend/app/db/models.py)
+skinparam shadowing false
+
+class Tenant {
+  PK = TENANT#{tenantId}
+  SK = TENANT#{tenantId}
+  GSI1PK = TENANT_STATUS#{status}
+  GSI1SK = TENANT#{tenantId}
+}
+
+class TrainingJob {
+  PK = JOB#{jobId}
+  SK = JOB#{jobId}
+  GSI1PK = JOB_TENANT#{tenantId}
+  GSI1SK = STATUS#{status}#{createdAt}
+  GSI2PK = JOB_USER#{userId}
+  GSI2SK = JOB#{createdAt}
+}
+
+class Experiment {
+  PK = EXPERIMENT#{experimentId}
+  SK = META
+  GSI1PK = EXP_TENANT#{tenantId}
+  GSI1SK = EXPERIMENT#{createdAt}#{experimentId}
+}
+
+class ExperimentRun {
+  PK = EXPERIMENT#{experimentId}
+  SK = RUN#{runId}
+  GSI1PK = RUN_TENANT#{tenantId}
+  GSI1SK = RUN#{runId}
+}
+
+class ModelVersion {
+  PK = MODEL#{tenantId}#{name}
+  SK = VERSION#{padVersion}
+  GSI1PK = MODEL_TENANT#{tenantId}
+  GSI1SK = STAGE#{stage}#{name}#{padVersion}
+  GSI2PK = MODELID#{modelId}
+  GSI2SK = VERSION#{padVersion}
+}
+
+class GovernanceReview {
+  PK = REVIEW#{reviewId}
+  SK = REVIEW#{reviewId}
+  GSI1PK = REVIEW_MODEL#{modelId}
+  GSI1SK = REVIEW#{createdAt}#{reviewId}
+  GSI2PK = REVIEW_TENANT#{tenantId}
+  GSI2SK = REVIEW#{createdAt}#{reviewId}
+}
+
+class AuditEvent {
+  PK = AUDIT#{eventId}
+  SK = AUDIT#{eventId}
+  GSI1PK = AUDIT_TENANT#{tenantId|PLATFORM}
+  GSI1SK = {timestamp}#{eventId}
+  GSI2PK = AUDIT_USER#{userId}
+  GSI2SK = {timestamp}#{eventId}
+}
+
+class NotebookSession {
+  PK = NOTEBOOK#{sessionId}
+  SK = NOTEBOOK#{sessionId}
+  GSI1PK = NB_USER#{userId}
+  GSI1SK = {createdAt}#{sessionId}
+}
+
+class FeatureView {
+  PK = FEATUREVIEW#{featureViewId}
+  SK = FEATUREVIEW#{featureViewId}
+  GSI1PK = FV_TENANT#{tenantId}
+  GSI1SK = FEATUREVIEW#{createdAt}#{featureViewId}
+}
+
+class SnowflakeTokenCache <<TTL>> {
+  PK = SFTOKEN#{userId}
+  SK = SFTOKEN#{userId}
+  ttl = expiresAt (epoch)
+  .. token KMS-encrypted ..
+}
+
+class RunToken <<TTL>> {
+  PK = RUNTOKEN#{tokenHash}
+  SK = RUNTOKEN#{tokenHash}
+  ttl = expiresAt (epoch)
+  .. SHA-256 hash only ..
+}
+
+class Counter <<internal>> {
+  PK = COUNTER#job
+  SK = COUNTER#job
+}
+
+Experiment "1" o-- "many" ExperimentRun : same PK,\nSK=RUN#
+ModelVersion "1" o-- "many" GovernanceReview : via GSI1\nREVIEW_MODEL#
+TrainingJob ..> RunToken : machine identity
+Tenant ..> ModelVersion : MODEL#{tenantId}#…
+
+note as N1
+  One physical table. GSI1 = tenant-scoped listings,
+  GSI2 = per-user / per-modelId lookups.
+  TTL auto-expires token items only.
+end note
+@enduml

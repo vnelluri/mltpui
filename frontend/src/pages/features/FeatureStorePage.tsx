@@ -3,7 +3,7 @@ import { featureStoreApi } from '../../api/featureStore';
 import { experimentsApi } from '../../api/experiments';
 import { extractErrorMessage } from '../../api/client';
 import { useTenantContext } from '../../hooks/useTenantContext';
-import { PageHeader, Button, Card, Modal, Field, Input, Select, Textarea, InlineAlert } from '../../components/shared/ui';
+import { PageHeader, Button, Card, Modal, Field, Input, Select, Textarea, InlineAlert, XIcon } from '../../components/shared/ui';
 import { DataTable, type Column } from '../../components/shared/DataTable';
 import { LoadingSpinner } from '../../components/shared/LoadingSpinner';
 import { formatDateTime, formatRelative } from '../../lib/format';
@@ -247,11 +247,13 @@ export function FeatureStorePage() {
                     value={f.name}
                     onChange={(e) => updateFeature(idx, 'name', e.target.value)}
                     placeholder="feature name"
+                    aria-label="Feature name"
                     className="font-mono"
                   />
                   <Select
                     value={f.dtype}
                     onChange={(e) => updateFeature(idx, 'dtype', e.target.value)}
+                    aria-label="Feature data type"
                     className="!w-32"
                   >
                     {DTYPES.map((d) => (
@@ -260,8 +262,13 @@ export function FeatureStorePage() {
                       </option>
                     ))}
                   </Select>
-                  <Button variant="ghost" onClick={() => removeFeature(idx)} className="!px-3">
-                    ✕
+                  <Button
+                    variant="ghost"
+                    onClick={() => removeFeature(idx)}
+                    className="!px-3"
+                    aria-label="Remove feature"
+                  >
+                    <XIcon size={16} />
                   </Button>
                 </div>
               ))}

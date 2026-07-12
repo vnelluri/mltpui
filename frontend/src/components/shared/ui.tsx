@@ -8,6 +8,32 @@ import {
 } from 'react';
 import { useEffect } from 'react';
 
+// ── Icons ───────────────────────────────────────────────────────────────────
+export function XIcon({ size = 20 }: { size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+      <path d="M6 6l12 12M18 6L6 18" />
+    </svg>
+  );
+}
+
+export function ChevronIcon({ open = false }: { open?: boolean }) {
+  return (
+    <svg
+      width="16"
+      height="16"
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      aria-hidden="true"
+      className={`transition-transform ${open ? 'rotate-180' : ''}`}
+    >
+      <path d="M6 9l6 6 6-6" />
+    </svg>
+  );
+}
+
 // ── Button ──────────────────────────────────────────────────────────────────
 type ButtonVariant = 'primary' | 'secondary' | 'ghost' | 'danger';
 
@@ -27,7 +53,7 @@ export function Button({ variant = 'primary', loading, disabled, className = '',
   return (
     <button
       disabled={disabled || loading}
-      className={`inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition disabled:cursor-not-allowed disabled:opacity-50 ${BUTTON_VARIANTS[variant]} ${className}`}
+      className={`inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2 text-sm font-semibold transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-brand-purple focus-visible:ring-offset-1 disabled:cursor-not-allowed disabled:opacity-50 ${BUTTON_VARIANTS[variant]} ${className}`}
       {...rest}
     >
       {loading && (
@@ -163,7 +189,11 @@ export function Modal({
       if (e.key === 'Escape') onClose();
     };
     window.addEventListener('keydown', handler);
-    return () => window.removeEventListener('keydown', handler);
+    document.body.style.overflow = 'hidden';
+    return () => {
+      window.removeEventListener('keydown', handler);
+      document.body.style.overflow = '';
+    };
   }, [open, onClose]);
 
   if (!open) return null;
@@ -173,6 +203,9 @@ export function Modal({
     <div className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto p-4 sm:p-8">
       <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" onClick={onClose} />
       <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={title}
         className={`relative z-10 my-auto w-full ${maxWidth} animate-fade-in rounded-xl border border-bg-elevated bg-bg-card shadow-2xl`}
       >
         <div className="flex items-center justify-between border-b border-bg-elevated px-6 py-4">
@@ -182,9 +215,7 @@ export function Modal({
             className="rounded-lg p-1 text-text-muted transition hover:bg-bg-elevated hover:text-text-primary"
             aria-label="Close"
           >
-            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-              <path d="M6 6l12 12M18 6L6 18" />
-            </svg>
+            <XIcon />
           </button>
         </div>
         <div className="px-6 py-5">{children}</div>

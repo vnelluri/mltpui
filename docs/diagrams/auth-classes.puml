@@ -1,0 +1,81 @@
+@startuml auth-classes
+title Backend Auth — Class Diagram (backend/app/auth, dependencies.py)
+skinparam shadowing false
+
+enum Role {
+  PlatformAdmin
+  MRM
+  TenantAdmin
+  DataScientist
+  JobRun <<machine>>
+}
+
+class TokenPayload {
+  oid : str
+  sub : str
+  email : str
+  preferred_username : str
+  name : str
+  tid : str
+  aud : str
+  iss : str
+  groups : List[str]
+  has_group_overage : bool
+  raw : dict
+}
+
+class Membership {
+  role : Role
+  tenantId : str?
+  tenantName : str?
+  groupName : str
+}
+
+class CurrentUser {
+  userId : str
+  email : str
+  name : str
+  role : Role  <<active>>
+  tenantId : str?  <<active>>
+  memberships : List[Membership]
+  accessToken : str
+  machineJobId : str?
+}
+
+class "_JwksCache" as JwksCache {
+  get_keys(force) : dict
+  find_key(kid) : jwk?
+  .. TTL-cached Entra public keys ..
+}
+
+class "oidc.validate_token()" as validate <<function>> {
+  RS256 signature vs JWKS
+  verify aud / iss / exp
+}
+
+class "membership_service" as ms <<service>> {
+  parse myapp-{tenant}-{role}
+  myapp-platform-admin / -mrm
+}
+
+class "get_current_user()" as gcu <<dependency>> {
+  X-Active-Role / X-Active-Tenant
+  validated against memberships
+}
+
+validate --> JwksCache : public keys
+validate --> TokenPayload : claims
+gcu --> validate
+gcu --> ms : groups -> memberships
+gcu --> CurrentUser : builds per request
+CurrentUser "1" *-- "many" Membership
+Membership --> Role
+CurrentUser --> Role
+
+note right of gcu
+  Every router depends on CurrentUser;
+  all DynamoDB queries are tenant-scoped
+  through it. Machine identity (JobRun)
+  comes from run tokens, not Entra.
+end note
+@enduml
