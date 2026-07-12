@@ -31,6 +31,21 @@ def _client():
     return make_boto3_client("s3", settings.S3_ENDPOINT_URL)
 
 
+def _root_prefix_for(user: CurrentUser) -> str:
+    """The root prefix a non-PlatformAdmin caller is confined to.
+
+    MRM is a platform-wide role (its membership never carries a tenant), so
+    it gets the shared ``mrm/`` area instead of a tenant prefix.
+    """
+    if user.is_mrm:
+        return "mrm/"
+    if not user.tenantId:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="No tenant assigned."
+        )
+    return f"{user.tenantId}/"
+
+
 @router.get("/browse")
 async def browse(
     prefix: str = "",
@@ -38,23 +53,20 @@ async def browse(
 ) -> Dict[str, Any]:
     """List folders (common prefixes) and files under ``prefix``.
 
-    Non-PlatformAdmin users are confined to their own tenant's prefix
-    (``{tenantId}/``): a blank prefix is forced to that tenant's root, and
+    Non-PlatformAdmin users are confined to their own root prefix — the
+    tenant's (``{tenantId}/``), or the platform-level ``mrm/`` area for MRM
+    (which never has a tenant): a blank prefix is forced to that root, and
     any attempt to browse outside it is rejected — this is enforced here at
     the API layer, not just hidden in the UI.
     """
     if not user.is_platform_admin:
-        if not user.tenantId:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST, detail="No tenant assigned."
-            )
-        tenant_root = f"{user.tenantId}/"
+        root = _root_prefix_for(user)
         if not prefix:
-            prefix = tenant_root
-        elif not prefix.startswith(tenant_root):
+            prefix = root
+        elif not prefix.startswith(root):
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN,
-                detail="You may only browse your own tenant's S3 prefix.",
+                detail="You may only browse your own S3 prefix.",
             )
 
     if prefix and not prefix.endswith("/"):
@@ -87,33 +99,30 @@ async def upload(
     prefix: Optional[str] = Form(None),
     user: CurrentUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """Upload a file into the caller's tenant prefix.
+    """Upload a file into the caller's own prefix.
 
     Data Scientists and MRM only. The destination defaults to the caller's
-    personal directory (``{tenantId}/users/{userId}/``); a caller-supplied
-    prefix is accepted but confined to the tenant root — enforced here, not
-    just in the UI, same as ``/browse``.
+    personal directory — ``{tenantId}/users/{userId}/`` for tenant-scoped
+    roles, ``mrm/{userId}/`` for MRM (a platform-wide role with no tenant).
+    A caller-supplied prefix is accepted but confined to that root —
+    enforced here, not just in the UI, same as ``/browse``.
     """
     if user.role not in (Role.DATA_SCIENTIST.value, Role.MRM.value):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Only Data Scientists and MRM may upload files.",
         )
-    if not user.tenantId:
-        raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Uploads are tenant-scoped — switch to a tenant membership first.",
-        )
 
-    tenant_root = f"{user.tenantId}/"
-    dest = prefix or f"{tenant_root}users/{user.userId}/"
+    root = _root_prefix_for(user)
+    default_dir = f"{root}{user.userId}/" if user.is_mrm else f"{root}users/{user.userId}/"
+    dest = prefix or default_dir
     if not dest.endswith("/"):
         dest += "/"
-    # Normalize to defeat "../" escapes before the tenant-root check.
-    if not posixpath.normpath(dest).startswith(user.tenantId) or not dest.startswith(tenant_root):
+    # Normalize to defeat "../" escapes before the root check.
+    if not posixpath.normpath(dest).startswith(root.rstrip("/")) or not dest.startswith(root):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="You may only upload into your own tenant's S3 prefix.",
+            detail="You may only upload into your own S3 prefix.",
         )
 
     filename = posixpath.basename(file.filename or "")

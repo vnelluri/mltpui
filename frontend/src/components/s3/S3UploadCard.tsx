@@ -11,7 +11,15 @@ export function S3UploadCard() {
   const { user } = useAuth();
   const { tenantId, isDataScientist, isMRM } = useTenantContext();
 
-  const defaultPrefix = tenantId && user ? `${tenantId}/users/${user.userId}/` : '';
+  // MRM is platform-wide (never has a tenant) and uploads to the shared
+  // mrm/ area; tenant roles get their tenant's users/ directory.
+  const defaultPrefix = !user
+    ? ''
+    : isMRM
+      ? `mrm/${user.userId}/`
+      : tenantId
+        ? `${tenantId}/users/${user.userId}/`
+        : '';
   const [prefix, setPrefix] = useState(defaultPrefix);
   const [file, setFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
@@ -41,14 +49,14 @@ export function S3UploadCard() {
   return (
     <Card className="p-5">
       <h3 className="mb-1 text-sm font-semibold text-text-primary">Upload to S3</h3>
-      {!tenantId ? (
+      {!defaultPrefix ? (
         <InlineAlert tone="info" className="mt-3">
           Uploads are tenant-scoped — switch to a tenant membership to upload files.
         </InlineAlert>
       ) : (
         <>
           <p className="mb-4 text-xs text-text-muted">
-            Files land in your personal tenant directory unless you change the destination.
+            Files land in your personal directory unless you change the destination.
           </p>
           <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
             <Input
