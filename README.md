@@ -327,18 +327,22 @@ ARN only, TTL-bound, deleted after the job) — never as plaintext env vars.
 
 ## AWS setup
 
-1. **DynamoDB table** — deploy the single table with all GSIs and TTL:
+1. **DynamoDB table** — deploy the single table with all GSIs and TTL via the
+   `infrastructure/dynamodb/iac` Terraform module, instantiated from your
+   pipeline root **as its own state** (it's the data store — keep its
+   lifecycle separate from the app stacks):
 
-   ```bash
-   aws cloudformation deploy \
-     --template-file infrastructure/dynamodb/tables.json \
-     --stack-name ml-platform-dynamodb \
-     --parameter-overrides TableName=ml-platform \
-     --capabilities CAPABILITY_NAMED_IAM
+   ```hcl
+   module "dynamodb" {
+     source     = "git::https://<host>/tmt.git//infrastructure/dynamodb/iac?ref=main"
+     table_name = "ml-platform"
+   }
    ```
 
-   (Alternatively, run `backend/scripts/create_tables.py` with
-   `DYNAMODB_ENDPOINT_URL` unset to target real AWS.)
+   Already have the table from the old CloudFormation template? See the
+   module README's import instructions instead of re-creating it.
+   (For quick experiments, `backend/scripts/create_tables.py` with
+   `DYNAMODB_ENDPOINT_URL` unset also creates the schema against real AWS.)
 
 2. **ECR repositories** — one per image:
 
@@ -614,7 +618,7 @@ Explore every endpoint interactively at **http://localhost:8000/docs**.
 │   └── iac/                        # Terraform module: frontend ECS service
 └── infrastructure/
     └── dynamodb/
-        └── tables.json             # CloudFormation: single table + GSIs + TTL
+        └── iac/                    # Terraform module: single table + GSIs + TTL
 ```
 
 **Companion repository — `tmt-dataplane`:** per-tenant compute provisioning
