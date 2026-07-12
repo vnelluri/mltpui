@@ -72,7 +72,12 @@ export function ReviewQueuePage() {
         title="Review Queue"
         description="All governance reviews across every tenant."
         actions={
-          <Select value={decisionFilter} onChange={(e) => setDecisionFilter(e.target.value)} className="!w-40">
+          <Select
+            value={decisionFilter}
+            onChange={(e) => setDecisionFilter(e.target.value)}
+            aria-label="Filter by decision"
+            className="!w-40"
+          >
             {DECISION_OPTIONS.map((d) => (
               <option key={d || 'all'} value={d}>
                 {d ? d[0].toUpperCase() + d.slice(1) : 'All decisions'}

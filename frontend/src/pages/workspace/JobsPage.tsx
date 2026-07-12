@@ -5,7 +5,7 @@ import { extractErrorMessage } from '../../api/client';
 import { usePolling } from '../../hooks/usePolling';
 import { useTenantContext } from '../../hooks/useTenantContext';
 import { useAuth } from '../../auth/AuthContext';
-import { PageHeader, Button, Select, Modal, Field, Input, InlineAlert } from '../../components/shared/ui';
+import { PageHeader, Button, Select, Modal, Field, Input, InlineAlert, XIcon } from '../../components/shared/ui';
 import { DataTable, type Column } from '../../components/shared/DataTable';
 import { JobStatusBadge } from '../../components/jobs/JobStatusBadge';
 import { formatDate, formatDateTime, formatDuration } from '../../lib/format';
@@ -422,6 +422,7 @@ export function JobsPage() {
                         setRerunParams((p) => p.map((r, i) => (i === idx ? { ...r, key: e.target.value } : r)))
                       }
                       placeholder="key"
+                      aria-label="Hyperparameter key"
                       className="font-mono"
                     />
                     <Input
@@ -430,14 +431,16 @@ export function JobsPage() {
                         setRerunParams((p) => p.map((r, i) => (i === idx ? { ...r, value: e.target.value } : r)))
                       }
                       placeholder="value"
+                      aria-label="Hyperparameter value"
                       className="font-mono"
                     />
                     <Button
                       variant="ghost"
                       className="!px-3"
                       onClick={() => setRerunParams((p) => p.filter((_, i) => i !== idx))}
+                      aria-label="Remove hyperparameter"
                     >
-                      ✕
+                      <XIcon size={16} />
                     </Button>
                   </div>
                 ))}

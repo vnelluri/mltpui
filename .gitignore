@@ -19,6 +19,7 @@ frontend/.vite/
 # Local tooling state
 .claude/settings.local.json
 .claude/scheduled_tasks.lock
+graphify-out/
 
 # Editor / OS noise
 .vscode/

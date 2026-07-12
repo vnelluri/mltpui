@@ -41,9 +41,13 @@ export interface DataTableProps<T> {
 
 function SortIcon({ dir }: { dir: 'asc' | 'desc' | null }) {
   return (
-    <span className="ml-1 inline-flex flex-col leading-none text-[8px]">
-      <span className={dir === 'asc' ? 'text-brand-purple' : 'text-text-muted'}>▲</span>
-      <span className={dir === 'desc' ? 'text-brand-purple' : 'text-text-muted'}>▼</span>
+    <span className="ml-1 inline-flex flex-col leading-none" aria-hidden="true">
+      <svg width="8" height="6" viewBox="0 0 8 6" className={dir === 'asc' ? 'text-brand-purple' : 'text-text-muted'}>
+        <path d="M4 0l4 6H0z" fill="currentColor" />
+      </svg>
+      <svg width="8" height="6" viewBox="0 0 8 6" className={dir === 'desc' ? 'text-brand-purple' : 'text-text-muted'}>
+        <path d="M4 6L0 0h8z" fill="currentColor" />
+      </svg>
     </span>
   );
 }
@@ -105,6 +109,13 @@ export function DataTable<T>({
               {columns.map((col) => (
                 <th
                   key={col.key}
+                  aria-sort={
+                    col.sortable && sort?.key === col.key
+                      ? sort.dir === 'asc'
+                        ? 'ascending'
+                        : 'descending'
+                      : undefined
+                  }
                   onClick={() => handleHeaderClick(col)}
                   className={`px-4 py-3 text-xs font-semibold uppercase tracking-wide text-text-secondary ${alignClass(
                     col.align,
