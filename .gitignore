@@ -1,6 +1,7 @@
-# Environment — .env.example is the committed template; the live .env may
-# hold real credentials (Entra/Snowflake secrets) and must never be committed.
-.env
+# Environment — .env holds only local-dev defaults (mock modes, localhost
+# endpoints) and is committed. Real credentials (Entra/Snowflake secrets)
+# go in .env.local, which must never be committed.
+.env.local
 
 # Python
 __pycache__/
