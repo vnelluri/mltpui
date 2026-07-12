@@ -27,15 +27,15 @@ export function LoginPage() {
       <div className="login-grid-pattern relative hidden w-1/2 flex-col justify-between overflow-hidden bg-brand-valhalla bg-gradient-to-br from-brand-valhalla via-brand-valhalla to-[#1a0f2e] p-12 lg:flex">
         <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-transparent" />
         <div className="relative z-10 flex items-center gap-3">
-          <img src="/truist-logo.svg" alt="Truist" className="logo-invert h-10 w-10" />
+          <img src="/truist-logo1.svg" alt="Truist" className="logo-invert h-10 w-10" />
           <span className="text-lg font-semibold text-white">Truist</span>
         </div>
         <div className="relative z-10 max-w-md">
           <h1 className="text-4xl font-semibold leading-tight text-white">
-            Enterprise ML Training Platform
+            Truist Model Training (TMT)
           </h1>
           {/* On-dark periwinkle: this panel stays valhalla-dark in the light theme */}
-          <p className="mt-4 text-[#A6A3E0]/90">
+          <p className="mt-4 text-brand-purple-soft/90">
             Submit training jobs, track experiments, and govern models across every
             business unit — with tenancy and access derived directly from Entra ID.
           </p>
@@ -49,8 +49,8 @@ export function LoginPage() {
       <div className="flex w-full flex-col items-center justify-center px-6 lg:w-1/2">
         <div className="w-full max-w-sm">
           <div className="mb-8 text-center lg:hidden">
-            <img src="/truist-logo.svg" alt="Truist" className="mx-auto mb-3 h-10 w-10" />
-            <h1 className="text-xl font-semibold text-text-primary">ML Training Platform</h1>
+            <img src="/truist-logo1.svg" alt="Truist" className="mx-auto mb-3 h-10 w-10" />
+            <h1 className="text-xl font-semibold text-text-primary">Truist Model Training (TMT)</h1>
           </div>
 
           <h2 className="text-2xl font-semibold text-text-primary">Sign in</h2>

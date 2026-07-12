@@ -776,18 +776,13 @@ function NotebookLaunchIcon({
     >
       {loading ? (
         <span className="h-3.5 w-3.5 animate-spin-slow rounded-full border-2 border-current/30 border-t-current" />
-      ) : studio === 'emr_studio' ? (
-        // Hexagon + spark: EMR Studio
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
-          <path d="M12 2l8 4.5v9L12 20l-8-4.5v-9L12 2z" strokeLinejoin="round" />
-          <path d="M12 7l1.2 3.1L16 11l-2.8.9L12 15l-1.2-3.1L8 11l2.8-.9L12 7z" fill="currentColor" stroke="none" />
-        </svg>
       ) : (
-        // Flask: SageMaker Studio
-        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.7">
-          <path d="M10 3h4M11 3v6l-5.5 8.5A2 2 0 007.2 21h9.6a2 2 0 001.7-3.5L13 9V3" strokeLinecap="round" strokeLinejoin="round" />
-          <path d="M8.5 15h7" strokeLinecap="round" />
-        </svg>
+        // Official AWS product icons (same assets as the Notebooks page).
+        <img
+          src={studio === 'emr_studio' ? '/emr.svg' : '/SageMaker.svg'}
+          alt=""
+          className="h-[15px] w-[15px]"
+        />
       )}
     </button>
   );

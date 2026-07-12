@@ -8,16 +8,18 @@ import { LoadingSpinner } from '../../components/shared/LoadingSpinner';
 import { formatDateTime, formatRelative } from '../../lib/format';
 import type { NotebookSession, SessionType } from '../../types/platform';
 
-const OPTIONS: { type: SessionType; title: string; description: string }[] = [
+const OPTIONS: { type: SessionType; title: string; description: string; logo: string }[] = [
   {
     type: 'emr_studio',
     title: 'EMR Studio',
     description: 'Jupyter-based notebooks backed by EMR Serverless, ideal for large-scale Spark workloads.',
+    logo: '/emr.svg',
   },
   {
     type: 'sagemaker_studio',
     title: 'SageMaker Studio',
     description: 'Fully managed ML IDE with built-in framework kernels and one-click training/deployment.',
+    logo: '/SageMaker.svg',
   },
 ];
 
@@ -91,10 +93,8 @@ export function NotebookPage() {
       <div className="grid grid-cols-1 gap-6 sm:grid-cols-2">
         {OPTIONS.map((opt) => (
           <Card key={opt.type} className="flex flex-col p-6">
-            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-brand-purple/15 text-brand-purple">
-              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <path d="M12 20h9M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4L16.5 3.5z" />
-              </svg>
+            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-xl bg-brand-purple/15">
+              <img src={opt.logo} alt="" className="h-8 w-8" />
             </div>
             <h3 className="text-base font-semibold text-text-primary">{opt.title}</h3>
             <p className="mt-2 flex-1 text-sm text-text-secondary">{opt.description}</p>
@@ -104,6 +104,7 @@ export function NotebookPage() {
               loading={launching === opt.type}
               onClick={() => void launch(opt.type)}
             >
+              {launching !== opt.type && <img src={opt.logo} alt="" className="h-4 w-4" />}
               Launch {opt.title}
             </Button>
           </Card>

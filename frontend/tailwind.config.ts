@@ -13,6 +13,9 @@ const config: Config = {
         brand: {
           // Darkened from the on-dark accent (#A6A3E0) so it reads on white.
           purple: '#6C63C5',
+          // Cold purple — only for use on dark (valhalla) surfaces; fails
+          // contrast on white.
+          'purple-soft': '#A6A3E0',
           valhalla: '#2E1A47',
           white: '#FFFFFF',
         },

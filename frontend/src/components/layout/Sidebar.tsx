@@ -1,7 +1,5 @@
 import { NavLink } from 'react-router-dom';
 import { useAuth } from '../../auth/AuthContext';
-import { ROLE_LABELS } from '../../auth/roles';
-import { StatusBadge } from '../shared/StatusBadge';
 
 interface NavItem {
   to: string;
@@ -30,7 +28,9 @@ const ICONS = {
   notebook: icon('M12 20h9M16.5 3.5a2.12 2.12 0 013 3L7 19l-4 1 1-4L16.5 3.5z'),
   governance: icon('M12 2L4 6v6c0 5.25 3.4 9.74 8 11 4.6-1.26 8-5.75 8-11V6l-8-4z'),
   audit: icon('M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h7l5 5v11a2 2 0 01-2 2z'),
-  snowflake: icon('M12 2v20M5 6l14 12M19 6L5 18M2 12h20'),
+  // Official Snowflake brand mark — stays brand-blue, not recolored like the
+  // stroke icons.
+  snowflake: <img src="/snowflake.svg" alt="" className="h-[18px] w-[18px]" />,
   settings: icon('M12 15a3 3 0 100-6 3 3 0 000 6z M19.4 15a1.65 1.65 0 00.33 1.82l.06.06a2 2 0 11-2.83 2.83l-.06-.06a1.65 1.65 0 00-1.82-.33 1.65 1.65 0 00-1 1.51V21a2 2 0 01-4 0v-.09A1.65 1.65 0 009 19.4a1.65 1.65 0 00-1.82.33l-.06.06a2 2 0 11-2.83-2.83l.06-.06A1.65 1.65 0 004.6 15a1.65 1.65 0 00-1.51-1H3a2 2 0 010-4h.09A1.65 1.65 0 004.6 9a1.65 1.65 0 00-.33-1.82l-.06-.06a2 2 0 112.83-2.83l.06.06A1.65 1.65 0 009 4.6a1.65 1.65 0 001-1.51V3a2 2 0 014 0v.09a1.65 1.65 0 001 1.51 1.65 1.65 0 001.82-.33l.06-.06a2 2 0 112.83 2.83l-.06.06A1.65 1.65 0 0019.4 9c.14.36.4.66.74.86.34.2.53.55.54.94V12c-.01.4-.2.75-.54.95-.34.2-.6.5-.74.86z'),
 };
 
@@ -88,20 +88,12 @@ function itemsForRole(role: string | null | undefined): NavItem[] {
 }
 
 export function Sidebar() {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const items = itemsForRole(user?.role);
 
   return (
-    <aside className="flex h-screen w-64 flex-shrink-0 flex-col border-r border-bg-elevated bg-bg-card">
-      <div className="flex items-center gap-3 px-5 py-6">
-        <img src="/truist-logo.svg" alt="Truist" className="h-8 w-8" />
-        <div>
-          <p className="text-sm font-semibold text-text-primary">Truist ML Platform</p>
-          <p className="text-[11px] text-brand-purple">Enterprise Training</p>
-        </div>
-      </div>
-
-      <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-2">
+    <aside className="flex h-full w-64 flex-shrink-0 flex-col border-r border-bg-elevated bg-bg-card">
+      <nav className="flex-1 space-y-1 overflow-y-auto px-3 py-4">
         {items.map((item) =>
           item.preview ? (
             // Preview feature — not part of this release; visible but disabled.
@@ -135,27 +127,6 @@ export function Sidebar() {
           ),
         )}
       </nav>
-
-      <div className="border-t border-bg-elevated px-4 py-4">
-        <div className="mb-3 flex items-center gap-3">
-          <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center rounded-full bg-brand-purple/15 text-sm font-semibold text-brand-purple">
-            {(user?.name ?? '?').charAt(0).toUpperCase()}
-          </div>
-          <div className="min-w-0">
-            <p className="truncate text-sm font-medium text-text-primary">{user?.name}</p>
-            <p className="truncate text-xs text-text-muted">{user?.email}</p>
-          </div>
-        </div>
-        {user && (
-          <StatusBadge status={user.role} tone="purple" label={ROLE_LABELS[user.role]} className="mb-3" />
-        )}
-        <button
-          onClick={() => void logout()}
-          className="w-full rounded-lg border border-bg-elevated px-3 py-2 text-xs font-medium text-text-secondary transition hover:bg-bg-elevated hover:text-text-primary"
-        >
-          Sign out
-        </button>
-      </div>
     </aside>
   );
 }
