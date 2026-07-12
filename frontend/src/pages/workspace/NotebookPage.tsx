@@ -104,7 +104,13 @@ export function NotebookPage() {
               loading={launching === opt.type}
               onClick={() => void launch(opt.type)}
             >
-              {launching !== opt.type && <img src={opt.logo} alt="" className="h-4 w-4" />}
+              {launching !== opt.type && (
+                // White chip so the purple EMR mark stays visible on the
+                // purple button fill.
+                <span className="flex h-5 w-5 items-center justify-center rounded bg-white">
+                  <img src={opt.logo} alt="" className="h-4 w-4" />
+                </span>
+              )}
               Launch {opt.title}
             </Button>
           </Card>
