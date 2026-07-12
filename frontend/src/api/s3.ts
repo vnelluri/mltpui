@@ -14,6 +14,9 @@ export const s3Api = {
     const { data } = await apiClient.post<{ bucket: string; key: string; size: number }>(
       '/s3/upload',
       form,
+      // Override the client's application/json default so axios sets the
+      // multipart boundary; without this the backend sees no form fields.
+      { headers: { 'Content-Type': 'multipart/form-data' } },
     );
     return data;
   },
