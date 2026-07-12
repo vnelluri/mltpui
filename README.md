@@ -328,13 +328,13 @@ ARN only, TTL-bound, deleted after the job) — never as plaintext env vars.
 ## AWS setup
 
 1. **DynamoDB table** — deploy the single table with all GSIs and TTL via the
-   `infrastructure/dynamodb/iac` Terraform module, instantiated from your
+   `backend/iac-data` Terraform module, instantiated from your
    pipeline root **as its own state** (it's the data store — keep its
    lifecycle separate from the app stacks):
 
    ```hcl
    module "dynamodb" {
-     source     = "git::https://<host>/tmt.git//infrastructure/dynamodb/iac?ref=main"
+     source     = "git::https://<host>/tmt.git//backend/iac-data?ref=main"
      table_name = "ml-platform"
    }
    ```
@@ -610,15 +610,13 @@ Explore every endpoint interactively at **http://localhost:8000/docs**.
 │   ├── Dockerfile                  # base → dev → prod (non-root, healthcheck)
 │   ├── app/                        # FastAPI application (routers/services/repositories)
 │   ├── scripts/                    # table creation, demo seed, local KMS setup
-│   └── iac/                        # Terraform module: backend ECS service + IAM
-├── frontend/
-│   ├── Dockerfile                  # base → dev → build → prod (nginx)
-│   ├── nginx.conf                  # SPA fallback, gzip, asset caching
-│   ├── src/                        # React application
-│   └── iac/                        # Terraform module: frontend ECS service
-└── infrastructure/
-    └── dynamodb/
-        └── iac/                    # Terraform module: single table + GSIs + TTL
+│   ├── iac/                        # Terraform module: backend ECS service + IAM
+│   └── iac-data/                   # Terraform module: DynamoDB table (own state — data store)
+└── frontend/
+    ├── Dockerfile                  # base → dev → build → prod (nginx)
+    ├── nginx.conf                  # SPA fallback, gzip, asset caching
+    ├── src/                        # React application
+    └── iac/                        # Terraform module: frontend ECS service
 ```
 
 **Companion repository — `tmt-dataplane`:** per-tenant compute provisioning

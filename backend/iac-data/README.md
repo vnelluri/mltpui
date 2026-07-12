@@ -1,4 +1,4 @@
-# infrastructure/dynamodb/iac — Terraform module: platform DynamoDB table
+# backend/iac-data — Terraform module: platform DynamoDB table
 
 The single table (default name `ml-platform`) behind the whole control plane —
 every entity lives here under the overloaded-GSI single-table design (see the
@@ -16,7 +16,7 @@ per-account pipeline root, e.g.:
 
 ```hcl
 module "dynamodb" {
-  source = "git::https://<host>/tmt.git//infrastructure/dynamodb/iac?ref=main"
+  source = "git::https://<host>/tmt.git//backend/iac-data?ref=main"
 
   table_name = "ml-platform"
   tags       = { Environment = "prod" }
