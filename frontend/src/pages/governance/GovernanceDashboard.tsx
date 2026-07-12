@@ -8,6 +8,7 @@ import { StatusBadge } from '../../components/shared/StatusBadge';
 import { LoadingSpinner } from '../../components/shared/LoadingSpinner';
 import { EmptyState } from '../../components/shared/EmptyState';
 import { formatRelative } from '../../lib/format';
+import { S3UploadCard } from '../../components/s3/S3UploadCard';
 import type { GovernanceReview, ModelVersion } from '../../types/platform';
 
 export function GovernanceDashboard() {
@@ -66,6 +67,11 @@ export function GovernanceDashboard() {
         <StatTile label="Approved" value={approved.length} />
         <StatTile label="Rejected" value={rejected.length} />
         <StatTile label="Production models" value={productionModels.length} />
+      </div>
+
+      {/* Renders for MRM only (the card self-gates by role). */}
+      <div className="mt-4">
+        <S3UploadCard />
       </div>
 
       <Card className="mt-8 p-5">

@@ -10,6 +10,7 @@ import { JobStatusBadge } from '../../components/jobs/JobStatusBadge';
 import { LoadingSpinner } from '../../components/shared/LoadingSpinner';
 import { EmptyState } from '../../components/shared/EmptyState';
 import { ComputePanel } from '../../components/tenant/ComputePanel';
+import { S3UploadCard } from '../../components/s3/S3UploadCard';
 import { useTenantContext } from '../../hooks/useTenantContext';
 import { formatRelative } from '../../lib/format';
 import type { TrainingJob, Experiment } from '../../types/platform';
@@ -96,6 +97,10 @@ export function DataScientistDashboard() {
           <ComputePanel tenantId={tenantId} compact />
         </div>
       )}
+
+      <div className="mt-4">
+        <S3UploadCard />
+      </div>
 
       <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card className="p-5">

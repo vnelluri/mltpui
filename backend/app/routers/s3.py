@@ -8,16 +8,23 @@ in prod — since LocalStack already emulates S3 faithfully.
 """
 from __future__ import annotations
 
-from typing import Any, Dict
+import posixpath
+from typing import Any, Dict, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile, status
 
 from app.auth.models import CurrentUser
 from app.config import settings
 from app.db.client import make_boto3_client
+from app.db.models import Role
 from app.dependencies import get_current_user
+from app.services.audit_service import audit_service
 
 router = APIRouter(prefix="/s3", tags=["s3"])
+
+# Uploads go through the backend (no presigned URLs, so no bucket CORS
+# needed); cap the size to keep request bodies sane.
+_MAX_UPLOAD_BYTES = 100 * 1024 * 1024
 
 
 def _client():
@@ -71,3 +78,73 @@ async def browse(
     ]
 
     return {"bucket": bucket, "prefix": prefix, "folders": folders, "files": files}
+
+
+@router.post("/upload")
+async def upload(
+    request: Request,
+    file: UploadFile = File(...),
+    prefix: Optional[str] = Form(None),
+    user: CurrentUser = Depends(get_current_user),
+) -> Dict[str, Any]:
+    """Upload a file into the caller's tenant prefix.
+
+    Data Scientists and MRM only. The destination defaults to the caller's
+    personal directory (``{tenantId}/users/{userId}/``); a caller-supplied
+    prefix is accepted but confined to the tenant root — enforced here, not
+    just in the UI, same as ``/browse``.
+    """
+    if user.role not in (Role.DATA_SCIENTIST.value, Role.MRM.value):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only Data Scientists and MRM may upload files.",
+        )
+    if not user.tenantId:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Uploads are tenant-scoped — switch to a tenant membership first.",
+        )
+
+    tenant_root = f"{user.tenantId}/"
+    dest = prefix or f"{tenant_root}users/{user.userId}/"
+    if not dest.endswith("/"):
+        dest += "/"
+    # Normalize to defeat "../" escapes before the tenant-root check.
+    if not posixpath.normpath(dest).startswith(user.tenantId) or not dest.startswith(tenant_root):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You may only upload into your own tenant's S3 prefix.",
+        )
+
+    filename = posixpath.basename(file.filename or "")
+    if not filename:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST, detail="Missing file name."
+        )
+
+    body = await file.read()
+    if len(body) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
+            detail="File exceeds the 100 MB upload limit.",
+        )
+
+    key = f"{dest}{filename}"
+    bucket = settings.S3_ARTIFACTS_BUCKET
+    _client().put_object(
+        Bucket=bucket,
+        Key=key,
+        Body=body,
+        ContentType=file.content_type or "application/octet-stream",
+    )
+
+    audit_service.record(
+        user=user,
+        action="s3.upload",
+        resource_type="S3Object",
+        resource_id=key,
+        tenant_id=user.tenantId,
+        details={"bucket": bucket, "size": len(body)},
+        request=request,
+    )
+    return {"bucket": bucket, "key": key, "size": len(body)}
