@@ -8,6 +8,7 @@ import { PageHeader, Card, StatTile } from '../../components/shared/ui';
 import { DataTable, type Column } from '../../components/shared/DataTable';
 import { JobStatusBadge } from '../../components/jobs/JobStatusBadge';
 import { LoadingSpinner } from '../../components/shared/LoadingSpinner';
+import { ComputePanel } from '../../components/tenant/ComputePanel';
 import { formatDate } from '../../lib/format';
 import type { Tenant, TenantMetrics, TrainingJob } from '../../types/platform';
 
@@ -83,6 +84,12 @@ export function TenantDashboard() {
         <StatTile label="Running now" value={metrics?.runningJobs ?? 0} accent />
         <StatTile label="Registered models" value={metrics?.registeredModels ?? '—'} />
       </div>
+
+      {tenantId && (
+        <div className="mt-6">
+          <ComputePanel tenantId={tenantId} />
+        </div>
+      )}
 
       <Card className="mt-6 p-5">
         <div className="mb-2 flex items-center justify-between text-sm">

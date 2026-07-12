@@ -1,5 +1,5 @@
 import { apiClient } from './client';
-import type { Paginated, Tenant, TenantMetrics, Framework } from '../types/platform';
+import type { Paginated, Tenant, TenantMetrics, TenantComputeStats, Framework } from '../types/platform';
 
 export interface CreateTenantPayload {
   /** Key field, chosen by the admin: the slug that appears in the AD group
@@ -53,6 +53,10 @@ export const tenantsApi = {
   },
   async metrics(id: string): Promise<TenantMetrics> {
     const { data } = await apiClient.get<TenantMetrics>(`/tenants/${id}/metrics`);
+    return data;
+  },
+  async computeStats(id: string): Promise<TenantComputeStats> {
+    const { data } = await apiClient.get<TenantComputeStats>(`/tenants/${id}/compute-stats`);
     return data;
   },
 };

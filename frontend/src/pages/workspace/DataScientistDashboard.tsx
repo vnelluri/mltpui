@@ -9,11 +9,14 @@ import { PageHeader, StatTile, Card, Button } from '../../components/shared/ui';
 import { JobStatusBadge } from '../../components/jobs/JobStatusBadge';
 import { LoadingSpinner } from '../../components/shared/LoadingSpinner';
 import { EmptyState } from '../../components/shared/EmptyState';
+import { ComputePanel } from '../../components/tenant/ComputePanel';
+import { useTenantContext } from '../../hooks/useTenantContext';
 import { formatRelative } from '../../lib/format';
 import type { TrainingJob, Experiment } from '../../types/platform';
 
 export function DataScientistDashboard() {
   const { user } = useAuth();
+  const { tenantId } = useTenantContext();
   const [jobs, setJobs] = useState<TrainingJob[]>([]);
   const [experiments, setExperiments] = useState<Experiment[]>([]);
   const [myModelCount, setMyModelCount] = useState(0);
@@ -87,6 +90,12 @@ export function DataScientistDashboard() {
         <StatTile label="Succeeded" value={succeeded} />
         <StatTile label="Models registered" value={myModelCount} />
       </div>
+
+      {tenantId && (
+        <div className="mt-4">
+          <ComputePanel tenantId={tenantId} compact />
+        </div>
+      )}
 
       <div className="mt-8 grid grid-cols-1 gap-6 lg:grid-cols-2">
         <Card className="p-5">

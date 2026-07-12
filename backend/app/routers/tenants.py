@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 
 from app.auth.models import CurrentUser
+from app.config import settings
 from app.db.models import ProvisioningStatus, Tenant, TenantStatus, utcnow_iso
 from app.db.repositories.job_repo import JobRepository
 from app.db.repositories.model_repo import ModelRepository
@@ -17,6 +18,7 @@ from app.db.repositories.tenant_repo import TenantRepository
 from app.dependencies import require_role
 from app.middleware.tenant_scope import enforce_tenant_access
 from app.services.audit_service import audit_service
+from app.services.dataplane_service import dataplane_client
 from app.services.tenant_provisioning_service import tenant_provisioning_service
 
 router = APIRouter(prefix="/tenants", tags=["tenants"])
@@ -288,4 +290,75 @@ async def tenant_metrics(
             s: sum(1 for j in jobs if j.status == s)
             for s in {"queued", "running", "succeeded", "failed", "cancelled"}
         },
+    }
+
+
+# Rough sizing for the phase-1 utilization ESTIMATE: EMR Serverless default
+# workers are 4 vCPU. Real per-application worker counts come from CloudWatch
+# (phase 2); until then utilization is derived from the running jobs' own
+# executor demand and labeled estimated.
+_EST_VCPU_PER_WORKER = 4
+_MOCK_MAX_VCPU = 400
+
+
+@router.get("/{tenant_id}/compute-stats")
+async def tenant_compute_stats(
+    tenant_id: str,
+    # DataScientist may read it too — the DS dashboard shows a slim version.
+    user: CurrentUser = Depends(require_role("TenantAdmin", "DataScientist")),
+) -> Dict[str, Any]:
+    """Cluster-level view of the tenant's EMR Serverless application:
+    platform-side job counts, application state + configured max capacity,
+    and an estimated utilization percentage."""
+    tenant = _tenant_repo.get(tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found.")
+    enforce_tenant_access(user, tenant_id)
+
+    from app.services.job_service import job_service
+
+    jobs, _ = _job_repo.list_by_tenant(tenant_id, limit=1000)
+    # Resolve live statuses WITHOUT persisting — counts must reflect mock
+    # progression even when the Jobs page isn't polling, but this endpoint
+    # stays read-only (the next jobs poll persists any transitions).
+    jobs = [job_service.live_status(j) for j in jobs]
+    running_jobs = [j for j in jobs if j.status == "running"]
+    queued_count = sum(1 for j in jobs if j.status == "queued")
+
+    # Application state + configured max capacity (one cheap API call).
+    app_state: str = "UNKNOWN"
+    max_vcpu: Optional[int] = None
+    if settings.EMR_MOCK_MODE:
+        app_state, max_vcpu = "STARTED", _MOCK_MAX_VCPU
+    elif tenant.emrApplicationId:
+        try:
+            resp = dataplane_client("emr-serverless", tenant_id).get_application(
+                applicationId=tenant.emrApplicationId
+            )
+            application = resp.get("application", {})
+            app_state = application.get("state", "UNKNOWN")
+            # maximumCapacity.cpu is a string like "400 vCPU".
+            cpu_text = str((application.get("maximumCapacity") or {}).get("cpu", ""))
+            digits = re.search(r"\d+", cpu_text)
+            max_vcpu = int(digits.group()) if digits else None
+        except Exception:
+            pass  # stats degrade gracefully; state stays UNKNOWN
+
+    allocated_vcpu = sum(
+        (j.maxExecutors or j.instanceCount or 1) * _EST_VCPU_PER_WORKER for j in running_jobs
+    )
+    utilization = (
+        min(100, round(allocated_vcpu / max_vcpu * 100)) if max_vcpu and allocated_vcpu else 0
+    )
+    return {
+        "tenantId": tenant_id,
+        "applicationId": tenant.emrApplicationId,
+        "applicationState": app_state,
+        "runningJobs": len(running_jobs),
+        "queuedJobs": queued_count,
+        "maxVcpu": max_vcpu,
+        "allocatedVcpuEstimate": allocated_vcpu,
+        "utilizationPct": utilization if max_vcpu else None,
+        # Honest labeling: derived from job executor demand, not CloudWatch.
+        "estimated": True,
     }

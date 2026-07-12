@@ -46,6 +46,22 @@ export interface Tenant {
   allowedFrameworks: Framework[];
 }
 
+/** Phase-1 cluster stats for a tenant's EMR Serverless application: job
+ * counts from the platform DB, application state/max capacity from EMR, and
+ * an ESTIMATED utilization (running jobs' executor demand — CloudWatch-backed
+ * real utilization is a later phase). */
+export interface TenantComputeStats {
+  tenantId: string;
+  applicationId: string | null;
+  applicationState: string;
+  runningJobs: number;
+  queuedJobs: number;
+  maxVcpu: number | null;
+  allocatedVcpuEstimate: number;
+  utilizationPct: number | null;
+  estimated: boolean;
+}
+
 export interface TenantMetrics {
   tenantId: string;
   jobCount: number;
