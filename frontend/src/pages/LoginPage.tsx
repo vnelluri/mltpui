@@ -21,10 +21,13 @@ export function LoginPage() {
   return (
     <div className="flex min-h-screen bg-bg-dark">
       {/* Left panel */}
-      <div className="login-grid-pattern relative hidden w-1/2 flex-col justify-between overflow-hidden bg-gradient-to-br from-brand-valhalla via-brand-valhalla to-[#1a0f2e] p-12 lg:flex">
+      {/* bg-brand-valhalla is load-bearing: .login-grid-pattern overrides the
+          Tailwind gradient (both are background-image), so the solid color is
+          what actually keeps this panel dark. */}
+      <div className="login-grid-pattern relative hidden w-1/2 flex-col justify-between overflow-hidden bg-brand-valhalla bg-gradient-to-br from-brand-valhalla via-brand-valhalla to-[#1a0f2e] p-12 lg:flex">
         <div className="absolute inset-0 bg-gradient-to-t from-black/40 via-transparent to-transparent" />
         <div className="relative z-10 flex items-center gap-3">
-          <img src="/truist-logo.svg" alt="Truist" className="h-10 w-10" />
+          <img src="/truist-logo.svg" alt="Truist" className="logo-invert h-10 w-10" />
           <span className="text-lg font-semibold text-white">Truist</span>
         </div>
         <div className="relative z-10 max-w-md">
@@ -68,6 +71,7 @@ export function LoginPage() {
               {ROLES.map((role: Role) => (
                 <button
                   key={role}
+                  aria-pressed={demoRole === role}
                   onClick={() => setDemoRole(role)}
                   className={`w-full rounded-xl border px-4 py-3 text-left transition ${
                     demoRole === role
