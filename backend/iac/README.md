@@ -2,8 +2,8 @@
 
 Deploys the FastAPI backend as an ECS Fargate service in the **control-plane
 account**: task definition, ECS service, CloudWatch log group, and the two IAM
-roles (execution + task). Replaces the hand-edited JSON under
-`infrastructure/ecs/`.
+roles (execution + task). Replaces the hand-edited JSON formerly under
+`infrastructure/ecs/` (removed).
 
 This is a **module** (no provider/backend blocks) — instantiate it from your
 per-account pipeline root, e.g.:

@@ -369,8 +369,8 @@ ARN only, TTL-bound, deleted after the job) — never as plaintext env vars.
 6. **Application Load Balancer** — HTTPS listener; forward `/api/*` (or a
    dedicated hostname) to the **backend** target group (port 8000) and everything
    else to the **frontend** target group (port 80). Create both target groups
-   (`ip` target type for Fargate awsvpc) and update the ARNs in
-   `infrastructure/ecs/ecs-service-*.json`.
+   (`ip` target type for Fargate awsvpc) and pass their ARNs to the
+   `backend/iac` and `frontend/iac` modules (`target_group_arn`).
 
 ---
 
@@ -393,21 +393,19 @@ docker push ${ECR}/ml-platform-backend:latest
 docker build -t ${ECR}/ml-platform-frontend:latest ./frontend
 docker push ${ECR}/ml-platform-frontend:latest
 
-# 4. Register the task definitions (replace ACCOUNT_ID placeholders first)
-aws ecs register-task-definition --cli-input-json file://infrastructure/ecs/task-definition-backend.json
-aws ecs register-task-definition --cli-input-json file://infrastructure/ecs/task-definition-frontend.json
+# 4. Apply the Terraform modules (task definitions, services, IAM) from your
+#    per-account pipeline root — see backend/iac/README.md and
+#    frontend/iac/README.md for the module inputs
+terraform apply
 
-# 5a. Create the services on first deploy (fill subnet/SG/target-group placeholders)
-aws ecs create-service --cli-input-json file://infrastructure/ecs/ecs-service-backend.json
-aws ecs create-service --cli-input-json file://infrastructure/ecs/ecs-service-frontend.json
-
-# 5b. On subsequent deploys, roll the services to the new task definition
+# 5. On subsequent image-only deploys, roll the services to pull the new tag
 aws ecs update-service --cluster ml-platform-cluster --service ml-platform-backend  --force-new-deployment
 aws ecs update-service --cluster ml-platform-cluster --service ml-platform-frontend --force-new-deployment
 ```
 
-Before applying, replace the `ACCOUNT_ID`, subnet, security-group, and
-target-group **placeholders** in the JSON files under `infrastructure/ecs/`.
+The task definitions and services are defined by the `backend/iac` and
+`frontend/iac` Terraform modules (the hand-edited JSON that previously lived
+under `infrastructure/ecs/` has been removed).
 
 ---
 
@@ -615,10 +613,8 @@ Explore every endpoint interactively at **http://localhost:8000/docs**.
 │   ├── src/                        # React application
 │   └── iac/                        # Terraform module: frontend ECS service
 └── infrastructure/
-    ├── dynamodb/
-    │   └── tables.json             # CloudFormation: single table + GSIs + TTL
-    └── ecs/                        # reference task/service JSON (superseded by
-        └── …                       # the backend/iac + frontend/iac modules)
+    └── dynamodb/
+        └── tables.json             # CloudFormation: single table + GSIs + TTL
 ```
 
 **Companion repository — `tmt-dataplane`:** per-tenant compute provisioning
