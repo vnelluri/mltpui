@@ -46,13 +46,13 @@ backend/
     db/                 DynamoDB client + repositories (repos own all
                         item shapes; single-table design)
   iac/                  Terraform module: backend ECS service + IAM
+  iac-emr-studio/       Terraform module: platform-global EMR Studio (SSO)
 frontend/
   src/
     App.tsx             Role-gated routes (react-router v6)
     pages/{admin,tenant,workspace,governance,snowflake,audit,features}/
     api/ auth/ components/ hooks/ lib/ types/
   iac/                  Terraform module: frontend ECS service (nginx)
-emr-studio/iac/         Terraform module: platform-global EMR Studio (SSO)
 scripts/                dev.sh (compose bring-up), test-api.sh (smoke test)
 docker-compose.yml      Full local stack (LocalStack + backend + frontend)
 ```
@@ -166,7 +166,7 @@ them:
   (`sagemaker:CreatePresignedDomainUrl`).
 
 **How the Studio connects to a tenant's EMR Serverless application**
-(all defined in `emr-studio/iac/main.tf`):
+(all defined in `backend/iac-emr-studio/main.tf`):
 
 1. **Sign-in** — the browser follows the backend deep link and
    authenticates through IAM Identity Center (Entra federated, groups
@@ -248,34 +248,37 @@ module's `README.md`.
 |---|---|
 | `backend/iac` | Backend ECS task definition + service, CloudWatch log group, execution role (image pull / logs / SSM+secret injection), task role (runtime permissions) |
 | `frontend/iac` | Frontend ECS task definition + service. Task role intentionally empty — static serving only |
-| `emr-studio/iac` | Platform-global EMR Studio (SSO): two security groups, service role, shared user role, `basic`/`intermediate` session policies, session mappings |
+| `backend/iac-emr-studio` | Platform-global EMR Studio (SSO): two security groups, service role, shared user role, `basic`/`intermediate` session policies, session mappings |
 
 Not created here (bring your own from the pipeline root): VPC/subnets, ECS
 cluster, ALB + target groups, security groups, DynamoDB table, S3 buckets,
 ECR repositories, SSM parameters, the Snowflake OAuth client secret, and
 everything in `tmt-dataplane`.
 
-**Why `emr-studio/iac` lives in this repo and not in `tmt-dataplane`:**
-in the account split the Studio *deploys* into the dataplane account
-(it must sit next to the EMR Serverless applications it attaches to),
-which makes `tmt-dataplane` look like the natural home. It stays here
-deliberately:
+**Why the Studio module lives at `backend/iac-emr-studio` and not in
+`tmt-dataplane`:** there are exactly three deploy pipelines — backend,
+frontend, and dataplane — and the **backend pipeline is the one that
+applies the Studio module**, so it lives alongside `backend/iac`. It
+stays out of `tmt-dataplane` deliberately:
 
-- The module is provider-less and instantiated from a per-account
-  pipeline root via a git source, so repo location does not constrain
-  which account deploys it.
 - Its lifecycle is platform-global, applied-once infrastructure —
   unlike `tmt-dataplane`, whose machinery is a per-tenant EventBridge
   reconcile loop.
 - Its contracts point at the control plane: the `url` output lands in
   control-plane SSM (`/ml-platform/emr/studio-url`, read by the
   backend), and Workspace storage is the control-plane artifacts bucket.
-- The single-account deployment (§4) has no separate dataplane account
-  at all.
+- The module is provider-less and instantiated via a git source, so
+  this location does not constrain which account it deploys into.
 
-Revisit this when per-tenant Studios ship (§3.6 known limitation): at
-that point the Studio becomes a per-tenant dataplane resource and
-belongs in the `tmt-dataplane` reconcile pipeline.
+Note the module is **not** part of the backend ECS deployment unit —
+the backend never calls the Studio API (§3.6); they merely share a
+pipeline. If you run the account split, the Studio must deploy into the
+dataplane account (next to the EMR Serverless applications it attaches
+to), so the backend pipeline needs a dataplane-account provider alias
+for this module. Revisit the placement when per-tenant Studios ship
+(§3.6 known limitation): at that point the Studio becomes a per-tenant
+dataplane resource and belongs in the `tmt-dataplane` reconcile
+pipeline.
 
 ### 4.2 Backend IAM (task role) — what the app may do
 

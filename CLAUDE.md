@@ -9,7 +9,7 @@ FastAPI backend + React SPA for multi-tenant ML model training with MRM governan
 ## Layout
 - `backend/` — FastAPI (Pydantic v2, boto3), DynamoDB single-table. Routers in `backend/app/routers/`, repos in `backend/app/db/`, services in `backend/app/services/`.
 - `frontend/` — React 18 + Vite + Tailwind + react-router v6. Pages in `frontend/src/pages/{admin,tenant,workspace,governance,snowflake,audit,features}/`, role-gated routes in `frontend/src/App.tsx`.
-- `backend/iac/`, `frontend/iac/`, `emr-studio/iac/` — Terraform modules (ECS Fargate, EMR Studio).
+- `backend/iac/`, `frontend/iac/`, `backend/iac-emr-studio/` — Terraform modules (ECS Fargate, EMR Studio).
 
 ## Commands
 Local dev runs entirely in Docker (LocalStack + backend + frontend) — no host Python/Node needed:

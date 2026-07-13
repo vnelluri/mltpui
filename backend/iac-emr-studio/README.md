@@ -1,4 +1,4 @@
-# emr-studio/iac — Terraform module: EMR Studio (SSO auth mode)
+# backend/iac-emr-studio — Terraform module: EMR Studio (SSO auth mode)
 
 Provisions the single, platform-global EMR Studio that the backend deep-links
 into (`EMR_STUDIO_URL`, see `backend/app/services/notebook_service.py`). The
@@ -10,7 +10,7 @@ per-account pipeline root, e.g.:
 
 ```hcl
 module "emr_studio" {
-  source = "git::https://<host>/tmt.git//emr-studio/iac?ref=main"
+  source = "git::https://<host>/tmt.git//backend/iac-emr-studio?ref=main"
 
   name_prefix         = "ml-platform"
   vpc_id              = var.vpc_id
