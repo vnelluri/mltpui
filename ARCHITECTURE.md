@@ -165,10 +165,36 @@ them:
 - **SageMaker Studio** — presigned domain URLs
   (`sagemaker:CreatePresignedDomainUrl`).
 
+**How the Studio connects to a tenant's EMR Serverless application**
+(all defined in `emr-studio/iac/main.tf`):
+
+1. **Sign-in** — the browser follows the backend deep link and
+   authenticates through IAM Identity Center (Entra federated, groups
+   SCIM-synced). The user's group must appear in the module's
+   `session_mappings` input, which assigns a session-policy tier; without
+   a mapping, no Studio session can start.
+2. **Session identity** — every federated session assumes the shared
+   **user role**, further restricted by the mapped session policy:
+   `basic` can browse EMR Serverless applications and attach a Workspace
+   to one; `intermediate` can additionally start/stop applications and
+   start/cancel job runs.
+3. **Attach** — inside the Studio the user attaches their Workspace to an
+   EMR Serverless application as its compute engine. The applications
+   offered are the **per-tenant applications created by `tmt-dataplane`**
+   (§3.7) — the Studio provisions no compute of its own.
+4. **Storage** — Workspace notebook files live at `default_s3_location`,
+   a prefix in the control-plane artifacts bucket
+   (`s3://ml-platform-artifacts-*/emr-studio-workspaces`).
+5. **Network** — AWS's two-security-group model: the Workspace SG may
+   reach the Engine SG only on port 18888 (Jupyter Enterprise Gateway);
+   the Engine egresses to EMR Serverless / AWS API endpoints (§4.4).
+
 Known limitation: the Studio is platform-global while jobs/data are
 per-tenant, so Studio session policies (`basic` / `intermediate` tiers)
-cannot scope S3 by tenant prefix the way per-tenant execution roles do.
-Per-tenant Studios are a later release.
+cannot scope S3 by tenant prefix — or restrict *which tenant's
+application* a user may attach to — the way per-tenant execution roles do
+for job submission. Treat notebook attach as platform-wide within a
+user's tier. Per-tenant Studios are a later release.
 
 ### 3.7 Tenant provisioning
 
@@ -228,6 +254,28 @@ Not created here (bring your own from the pipeline root): VPC/subnets, ECS
 cluster, ALB + target groups, security groups, DynamoDB table, S3 buckets,
 ECR repositories, SSM parameters, the Snowflake OAuth client secret, and
 everything in `tmt-dataplane`.
+
+**Why `emr-studio/iac` lives in this repo and not in `tmt-dataplane`:**
+in the account split the Studio *deploys* into the dataplane account
+(it must sit next to the EMR Serverless applications it attaches to),
+which makes `tmt-dataplane` look like the natural home. It stays here
+deliberately:
+
+- The module is provider-less and instantiated from a per-account
+  pipeline root via a git source, so repo location does not constrain
+  which account deploys it.
+- Its lifecycle is platform-global, applied-once infrastructure —
+  unlike `tmt-dataplane`, whose machinery is a per-tenant EventBridge
+  reconcile loop.
+- Its contracts point at the control plane: the `url` output lands in
+  control-plane SSM (`/ml-platform/emr/studio-url`, read by the
+  backend), and Workspace storage is the control-plane artifacts bucket.
+- The single-account deployment (§4) has no separate dataplane account
+  at all.
+
+Revisit this when per-tenant Studios ship (§3.6 known limitation): at
+that point the Studio becomes a per-tenant dataplane resource and
+belongs in the `tmt-dataplane` reconcile pipeline.
 
 ### 4.2 Backend IAM (task role) — what the app may do
 
