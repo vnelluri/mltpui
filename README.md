@@ -439,6 +439,7 @@ under `infrastructure/ecs/` has been removed).
 | `DYNAMODB_ENDPOINT_URL` | DynamoDB endpoint (blank → real AWS) | `http://localstack:4566` | *(blank)* |
 | `S3_ENDPOINT_URL` | S3 endpoint (blank → real AWS) | `http://localstack:4566` | *(blank)* |
 | `S3_ARTIFACTS_BUCKET` | Artifacts bucket | `ml-platform-artifacts` | `ml-platform-artifacts-prod` |
+| `ARTIFACT_URI_MOCK_MODE` | Skip the S3 existence check on model-registry artifact URIs (format checks still apply) — testing only | `false` | `false` |
 | `EMR_SERVERLESS_APPLICATION_ID` | DEPRECATED — EMR apps are per-tenant (`Tenant.emrApplicationId`); kept only as a fallback for legacy job records | *(blank)* | *(blank)* |
 | `EMR_STUDIO_URL` | Access URL of the SSO-mode EMR Studio (the `backend/iac-emr-studio` module's `url` output; the app deep-links into it so each user's own identity applies) | *(blank)* | `https://es-….emrstudio-prod.us-east-1.amazonaws.com` |
 | `RUN_TOKEN_TTL_HOURS` | Lifetime of per-run machine tokens minted at job submission | `26` | `26` |

@@ -110,6 +110,8 @@ services:
       SNOWFLAKE_MOCK_MODE: "true"
       EMR_MOCK_MODE: "true"
       SAGEMAKER_MOCK_MODE: "true"
+      # Skip the S3 existence check on artifact URIs (testing only).
+      ARTIFACT_URI_MOCK_MODE: ${ARTIFACT_URI_MOCK_MODE:-false}
       # ── CORS ──
       CORS_ALLOWED_ORIGINS: '["http://localhost:3000"]'
     networks:

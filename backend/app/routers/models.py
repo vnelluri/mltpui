@@ -64,6 +64,8 @@ def _validate_artifact_uri(artifact_uri: str, field: str = "artifactUri") -> str
     verified makes every downstream governance step untrustworthy. Accepts
     either an exact object key or a prefix containing at least one object.
     Returns the normalized (trimmed) URI; errors name the offending field.
+    ARTIFACT_URI_MOCK_MODE=true (testing only) skips the S3 existence
+    lookup, keeping just the format checks.
     """
     artifact_uri = artifact_uri.strip()
     if not artifact_uri.startswith("s3://"):
@@ -80,6 +82,8 @@ def _validate_artifact_uri(artifact_uri: str, field: str = "artifactUri") -> str
                 f"'{artifact_uri}'. Expected e.g. s3://ml-platform-artifacts/<tenant>/models/model.pkl."
             ),
         )
+    if settings.ARTIFACT_URI_MOCK_MODE:
+        return artifact_uri
     client = make_boto3_client("s3", settings.S3_ENDPOINT_URL)
     try:
         try:

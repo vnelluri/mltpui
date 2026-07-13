@@ -76,6 +76,11 @@ class Settings(BaseSettings):
     # ── S3 ──────────────────────────────────────────────────────────────────
     S3_ENDPOINT_URL: Optional[str] = None
     S3_ARTIFACTS_BUCKET: str = "ml-platform-artifacts"
+    # true: model-registry artifact URIs are format-checked only — the S3
+    # existence lookup (head/list) is skipped and the URI is trusted as-is.
+    # Testing convenience; never enable in prod: the registry is what MRM
+    # reviews against, so an unverified URI breaks the governance chain.
+    ARTIFACT_URI_MOCK_MODE: bool = False
 
     # ── EMR Serverless ──────────────────────────────────────────────────────
     # Local-dev/mock default ONLY. In real mode every tenant has its own EMR
