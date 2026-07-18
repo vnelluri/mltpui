@@ -4,17 +4,13 @@ import {
   useContext,
   useEffect,
   useMemo,
-  useRef,
   useState,
   type ReactNode,
 } from 'react';
 import axios from 'axios';
-import {
-  PublicClientApplication,
-  type AccountInfo,
-  InteractionRequiredAuthError,
-} from '@azure/msal-browser';
-import { msalConfig, loginRequest, apiTokenRequest, DEMO_MODE } from './msalConfig';
+import { fetchAuthSession, signInWithRedirect, signOut } from 'aws-amplify/auth';
+import { Hub } from 'aws-amplify/utils';
+import { AMPLIFY_CONFIGURED, DEMO_MODE, SAML_PROVIDER } from './amplifyConfig';
 import { setTokenProvider, getActiveMembership, setActiveMembership } from '../api/client';
 import { authApi } from '../api/auth';
 import type { CurrentUser, Role } from '../types/platform';
@@ -31,7 +27,7 @@ type AuthStatus =
 interface AuthContextValue {
   status: AuthStatus;
   user: CurrentUser | null;
-  /** Entra group OIDs decoded from the ID token — display/debug only. */
+  /** Azure AD group names from the ID token's custom:groups claim — display/debug only. */
   groups: string[];
   /** Role derived from groups claim — display/debug only, NOT authoritative. */
   tokenRole: Role | null;
@@ -50,15 +46,35 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 const DEMO_AUTH_KEY = 'mlplatform.demoAuthenticated';
 const DEMO_ROLE_KEY = 'mlplatform.demoRole';
 
-// MSAL app instance (only meaningfully used in prod mode).
-const msalInstance = new PublicClientApplication(msalConfig);
-
-function decodeGroupsFromIdToken(account: AccountInfo | null): string[] {
-  const claims = account?.idTokenClaims as { groups?: unknown } | undefined;
-  if (claims && Array.isArray(claims.groups)) {
-    return claims.groups.filter((g): g is string => typeof g === 'string');
+/**
+ * Parse the `custom:groups` ID-token claim: a comma-separated string of
+ * Azure AD group names (Cognito may wrap multi-valued SAML attributes in
+ * square brackets). Mirrors the backend's parse_groups_claim.
+ */
+function parseGroupsClaim(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.map((g) => String(g).trim()).filter(Boolean);
   }
-  return [];
+  if (typeof value !== 'string') return [];
+  let cleaned = value.trim();
+  if (cleaned.startsWith('[') && cleaned.endsWith(']')) {
+    cleaned = cleaned.slice(1, -1);
+  }
+  return cleaned
+    .split(',')
+    .map((g) => g.trim())
+    .filter(Boolean);
+}
+
+async function groupsFromSession(): Promise<string[] | null> {
+  try {
+    const session = await fetchAuthSession();
+    const payload = session.tokens?.idToken?.payload;
+    if (!payload) return null;
+    return parseGroupsClaim(payload['custom:groups']);
+  } catch {
+    return null;
+  }
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -69,27 +85,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [demoRole, setDemoRoleState] = useState<Role>(
     () => (localStorage.getItem(DEMO_ROLE_KEY) as Role) || 'PlatformAdmin',
   );
-  const msalReady = useRef(false);
 
   const tokenRole = useMemo(() => parseTenantRole(groups), [groups]);
 
   // Register the Bearer-token provider used by api/client.ts (prod mode only).
+  // The backend reads user info from the Cognito ID token, so the ID token —
+  // not the access token — is the Bearer credential. Amplify refreshes the
+  // session transparently inside fetchAuthSession.
   const registerTokenProvider = useCallback(() => {
     if (DEMO_MODE) {
       setTokenProvider(null);
       return;
     }
     setTokenProvider(async () => {
-      const account = msalInstance.getActiveAccount() ?? msalInstance.getAllAccounts()[0];
-      if (!account) return null;
       try {
-        const result = await msalInstance.acquireTokenSilent({ ...apiTokenRequest, account });
-        return result.accessToken;
-      } catch (err) {
-        if (err instanceof InteractionRequiredAuthError) {
-          const result = await msalInstance.acquireTokenPopup(apiTokenRequest);
-          return result.accessToken;
-        }
+        const session = await fetchAuthSession();
+        return session.tokens?.idToken?.toString() ?? null;
+      } catch {
         return null;
       }
     });
@@ -127,44 +139,82 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, []);
 
+  // Complete a signed-in Cognito session: groups from the ID token, token
+  // provider registration, then the authoritative /auth/me.
+  const completeSignIn = useCallback(
+    async (sessionGroups: string[]) => {
+      setGroups(sessionGroups);
+      registerTokenProvider();
+      await refreshMe();
+    },
+    [refreshMe, registerTokenProvider],
+  );
+
   // Initial bootstrap.
   useEffect(() => {
     let cancelled = false;
-    (async () => {
-      if (DEMO_MODE) {
-        setTokenProvider(null);
-        const wasAuthed = localStorage.getItem(DEMO_AUTH_KEY) === 'true';
-        if (wasAuthed) {
-          await refreshMe();
-        } else if (!cancelled) {
-          setStatus('unauthenticated');
-        }
+
+    if (DEMO_MODE) {
+      setTokenProvider(null);
+      const wasAuthed = localStorage.getItem(DEMO_AUTH_KEY) === 'true';
+      if (wasAuthed) {
+        void refreshMe();
+      } else {
+        setStatus('unauthenticated');
+      }
+      return;
+    }
+
+    if (!AMPLIFY_CONFIGURED) {
+      setError(
+        'Cognito is not configured. Set VITE_COGNITO_USER_POOL_ID, ' +
+          'VITE_COGNITO_CLIENT_ID and VITE_COGNITO_DOMAIN.',
+      );
+      setStatus('error');
+      return;
+    }
+
+    // Prod mode: Amplify parses the Hosted UI redirect (?code=…) on load and
+    // announces the outcome via Hub — listen before probing for a session so
+    // the callback can't be missed.
+    const unsubscribe = Hub.listen('auth', ({ payload }) => {
+      switch (payload.event) {
+        case 'signInWithRedirect':
+          void (async () => {
+            const sessionGroups = await groupsFromSession();
+            if (!cancelled) await completeSignIn(sessionGroups ?? []);
+          })();
+          break;
+        case 'signInWithRedirect_failure':
+          if (!cancelled) {
+            setError('Single sign-on failed. Please try again.');
+            setStatus('unauthenticated');
+          }
+          break;
+      }
+    });
+
+    void (async () => {
+      const sessionGroups = await groupsFromSession();
+      if (cancelled) return;
+      if (sessionGroups !== null) {
+        await completeSignIn(sessionGroups);
         return;
       }
-
-      // Prod mode: initialize MSAL and check for an existing session.
-      try {
-        await msalInstance.initialize();
-        msalReady.current = true;
-        await msalInstance.handleRedirectPromise();
-        const accounts = msalInstance.getAllAccounts();
-        if (accounts.length > 0) {
-          msalInstance.setActiveAccount(accounts[0]);
-          setGroups(decodeGroupsFromIdToken(accounts[0]));
-          registerTokenProvider();
-          await refreshMe();
-        } else if (!cancelled) {
-          setStatus('unauthenticated');
-        }
-      } catch {
-        if (!cancelled) {
-          setError('Failed to initialize authentication.');
-          setStatus('error');
-        }
+      // No session yet. If this load IS the Hosted UI callback, stay in
+      // 'authenticating' and let the Hub listener finish; otherwise the user
+      // simply isn't signed in.
+      const params = new URLSearchParams(window.location.search);
+      if (params.has('code') || params.has('error')) {
+        setStatus('authenticating');
+      } else {
+        setStatus('unauthenticated');
       }
     })();
+
     return () => {
       cancelled = true;
+      unsubscribe();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -178,24 +228,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
     try {
-      if (!msalReady.current) {
-        await msalInstance.initialize();
-        msalReady.current = true;
-      }
-      const result = await msalInstance.loginPopup(loginRequest);
-      msalInstance.setActiveAccount(result.account);
-      setGroups(decodeGroupsFromIdToken(result.account));
-      registerTokenProvider();
-      await refreshMe();
-    } catch (err) {
-      if (axios.isAxiosError(err) && err.response?.status === 403) {
-        setStatus('no-access');
-        return;
-      }
-      setError('Microsoft sign-in was cancelled or failed.');
+      // Full-page redirect: Hosted UI → Azure AD (SAML) → back here, where
+      // the bootstrap effect's Hub listener completes the sign-in.
+      await signInWithRedirect({ provider: { custom: SAML_PROVIDER } });
+    } catch {
+      setError('Single sign-on could not be started.');
       setStatus('unauthenticated');
     }
-  }, [refreshMe, registerTokenProvider]);
+  }, [refreshMe]);
 
   const logout = useCallback(async () => {
     localStorage.removeItem(DEMO_AUTH_KEY);
@@ -203,12 +243,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setUser(null);
     setGroups([]);
     setStatus('unauthenticated');
-    if (!DEMO_MODE && msalReady.current) {
-      const account = msalInstance.getActiveAccount() ?? undefined;
+    if (!DEMO_MODE) {
       try {
-        await msalInstance.logoutPopup({ account });
+        // Redirects through the Cognito /logout endpoint back to /login.
+        await signOut();
       } catch {
-        // Ignore popup-close errors on logout.
+        // Ignore sign-out errors; local state is already cleared.
       }
     }
   }, []);

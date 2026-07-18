@@ -41,13 +41,17 @@ def _is_expired(expires_at: str) -> bool:
 
 
 def connect_snowflake(user: CurrentUser) -> SnowflakeTokenCache:
-    """Exchange the user's Entra token for a Snowflake OAuth token and cache it.
+    """Exchange the user's bearer token for a Snowflake OAuth token and cache it.
+
+    In prod the bearer is the Cognito ID token — Snowflake's External OAuth
+    integration must trust the user pool as an issuer for the RFC 8693
+    exchange to succeed.
 
     Shared by ``POST /snowflake/connect`` and ``GET /auth/snowflake-token``.
     """
-    entra_token = user.accessToken or "dev-mode-token"
+    bearer_token = user.accessToken or "dev-mode-token"
     raw_token, username, expires_at = snowflake_service.exchange_token(
-        entra_token, user.email
+        bearer_token, user.email
     )
     cipher = KmsCipher(tenant_id=user.tenantId)
     encrypted = cipher.encrypt(raw_token)

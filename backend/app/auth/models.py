@@ -13,31 +13,34 @@ MACHINE_ROLE = "JobRun"
 
 
 class TokenPayload(BaseModel):
-    """Subset of the validated Entra ID JWT claims we rely on."""
+    """Subset of the validated Cognito ID-token claims we rely on.
 
-    oid: Optional[str] = None
+    The SAML identity provider's attribute mapping populates ``email``,
+    ``given_name`` and ``custom:groups`` (comma-separated Azure AD group
+    names, parsed into ``groups`` by app.auth.cognito).
+    """
+
     sub: Optional[str] = None
     email: Optional[str] = None
-    preferred_username: Optional[str] = None
-    name: Optional[str] = None
-    tid: Optional[str] = None
+    given_name: Optional[str] = None
     aud: Optional[str] = None
     iss: Optional[str] = None
+    token_use: Optional[str] = None
     groups: List[str] = Field(default_factory=list)
-    # True when the token carries a `_claim_names` group-overage pointer
-    # instead of a `groups` claim (user in >200 groups) — resolved via
-    # Microsoft Graph in get_current_user.
-    has_group_overage: bool = False
     # Raw claims retained for /auth/token-info in dev.
     raw: dict = Field(default_factory=dict)
 
     @property
     def user_id(self) -> Optional[str]:
-        return self.oid or self.sub
+        return self.sub
 
     @property
     def user_email(self) -> Optional[str]:
-        return self.email or self.preferred_username
+        return self.email
+
+    @property
+    def display_name(self) -> Optional[str]:
+        return self.given_name or self.email or self.sub
 
 
 class Membership(BaseModel):
@@ -77,8 +80,8 @@ class CurrentUser(BaseModel):
     machineJobId: Optional[str] = None
     machineExperimentId: Optional[str] = None
     machineRunId: Optional[str] = None
-    # The user's raw Entra access token (prod) — used for Snowflake token
-    # exchange. Never persisted or logged.
+    # The user's raw bearer token (prod: the Cognito ID token) — used for
+    # Snowflake token exchange. Never persisted or logged.
     accessToken: Optional[str] = Field(default=None, exclude=True)
 
     @property

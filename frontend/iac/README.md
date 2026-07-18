@@ -19,6 +19,6 @@ module "frontend" {
 }
 ```
 
-Build-time note: `VITE_*` variables (API base URL, Entra IDs, demo mode) are
+Build-time note: `VITE_*` variables (API base URL, Cognito IDs, demo mode) are
 baked into the bundle at `docker build` time — they are pipeline build args,
 not runtime configuration, which is why this module has no secrets/SSM wiring.

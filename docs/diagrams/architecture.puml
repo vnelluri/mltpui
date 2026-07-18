@@ -1,20 +1,20 @@
 @startuml architecture
-title ML Training Platform — Deployment Architecture (Plan A: direct OIDC, no Cognito)
+title ML Training Platform — Deployment Architecture (Cognito + Azure AD SAML)
 skinparam componentStyle rectangle
 skinparam shadowing false
 
 actor "User\n(DataScientist / TenantAdmin /\nPlatformAdmin / MRM)" as user
 
 cloud "Azure" {
-  [Entra ID\n(OIDC IdP)] as entra
-  [Microsoft Graph\n(group overage only)] as graph
+  [Azure AD\n(SAML IdP)] as azuread
 }
 
 node "Browser" {
-  [React SPA\n@azure/msal-browser] as spa
+  [React SPA\naws-amplify] as spa
 }
 
 cloud "AWS Account (control plane)" {
+  [Cognito user pool\nHosted UI + SAML IdP\n(custom:groups mapping)] as cognito
   [Route 53] as r53
   [ALB + ACM cert] as alb
   node "ECS Fargate" {
@@ -36,13 +36,13 @@ cloud "Snowflake" {
 }
 
 user --> spa
-spa <..> entra : 1. loginPopup — OIDC\nauth code + PKCE\n(ID + access token)
+spa <..> cognito : 1. signInWithRedirect —\nHosted UI, auth code grant\n(ID + access + refresh token)
+cognito <..> azuread : 2. SAML: email, givenname,\ngroups (names) →\nemail / given_name / custom:groups
 spa --> r53 : app.yourco.com
 r53 --> alb
 alb --> fe : forward (no ALB auth)
-alb --> be : forward /api\nBearer <access token>
-be ..> entra : 2. fetch JWKS public keys\n(once, cached)
-be ..> graph : 3. resolve groups\n(only if >200 groups)
+alb --> be : forward /api\nBearer <Cognito ID token>
+be ..> cognito : 3. fetch JWKS public keys\n(once, cached)
 be --> ddb : tenant-scoped reads/writes
 be --> kms : encrypt Snowflake tokens
 be --> sm : run-token transit to jobs
@@ -51,12 +51,12 @@ be --> emr : submit / poll jobs
 be --> sgm : training jobs
 be --> evb : TenantProvisioningRequested
 be --> sts : assume dataplane role
-be <..> sf : exchange Entra token\nfor Snowflake token
+be <..> sf : exchange Cognito ID token\nfor Snowflake token
 
 note bottom of be
-  Auth per request: verify JWT signature (RS256, JWKS),
-  aud + iss + exp, then map groups
+  Auth per request: verify ID-token signature (RS256, JWKS),
+  aud + iss + exp + token_use=id, then map custom:groups
   myapp-{tenant}-{role} -> CurrentUser(role, tenantId).
-  No Cognito, no SAML, no session state.
+  No Microsoft Graph, no session state.
 end note
 @enduml

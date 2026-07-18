@@ -1,4 +1,9 @@
-# SSO Setup — Entra ID (OIDC) for mltpui, no Cognito
+# SSO Setup — Entra ID (OIDC) for mltpui, no Cognito — **SUPERSEDED**
+
+> **This document is superseded.** The platform now authenticates via **AWS
+> Cognito + Amplify with Azure AD SAML federation** (the org-standard
+> pattern) — see [COGNITO_SAML_SSO.md](COGNITO_SAML_SSO.md). Kept for
+> historical context on the direct-OIDC design it replaced.
 
 ## The pattern and where to read about it
 

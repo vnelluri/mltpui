@@ -17,7 +17,7 @@ and how it is laid out in production. For local-dev instructions see
 | Artifacts | S3 (`ml-platform-artifacts-*`) | Control-plane account | Model binaries, uploads, EMR Studio workspaces |
 | Training compute | EMR Serverless / SageMaker Training | Dataplane account (per tenant) | Launch targets for training jobs |
 | Notebooks | EMR Studio (SSO), SageMaker Studio | Dataplane / platform-global | Deep-linked from the UI; backend never calls the Studio API |
-| Identity | Azure Entra ID (OIDC) | External | Authentication + role/tenant derivation from group names |
+| Identity | Cognito (Hosted UI) ← SAML ← Azure AD | External | Authentication + role/tenant derivation from group names (`custom:groups`) |
 | Data warehouse | Snowflake (OAuth token exchange) | External | Per-user data access from the UI and from training jobs |
 | Secrets/config | SSM Parameter Store, Secrets Manager, KMS | Both accounts | Config injection, token encryption, per-job credential transit |
 
@@ -32,7 +32,7 @@ backend/
   app/
     main.py             FastAPI entrypoint: routers, CORS, request logging
     config.py           Settings (env vars; mock-mode flags; endpoints)
-    auth/               OIDC validation, TokenPayload / CurrentUser models
+    auth/               Cognito ID-token validation, TokenPayload / CurrentUser models
     dependencies.py     get_current_user, role guards, tenant scoping
     middleware/          Request logging
     routers/            HTTP layer: auth, tenants, jobs, experiments,
@@ -83,13 +83,17 @@ through that object — **never bypass tenant scoping**.
 
 ### 3.2 Authentication and authorization
 
-- **Identity**: Azure Entra ID OIDC. The SPA obtains a JWT; the backend
-  validates it (issuer, audience, signature) in `app/auth/oidc.py`.
+- **Identity**: AWS Cognito federated to Azure AD via SAML. The SPA signs
+  in through the Cognito Hosted UI (Amplify) and sends the **Cognito ID
+  token** as the Bearer credential; the backend validates it (issuer,
+  audience, signature, `token_use=id`) in `app/auth/cognito.py`. User info
+  (email, given_name) and Azure AD group names (`custom:groups`,
+  comma-separated) come from the SAML attribute mapping — no Microsoft
+  Graph calls.
 - **Roles from groups**: memberships are derived from group names following
   the convention `myapp-{tenantId}-{role}` (e.g.
   `myapp-team-a-datascientist`) plus platform-level groups
-  (`myapp-platform-admin`, `myapp-mrm`). Group overage (>200 groups) is
-  resolved via Microsoft Graph.
+  (`myapp-platform-admin`, `myapp-mrm`).
 - **Roles**: `PlatformAdmin`, `TenantAdmin`, `DataScientist`, `MRM`, plus
   the machine-only `JobRun` role (never held by humans; rejected by every
   normal role guard).
@@ -137,9 +141,11 @@ frontend gating is UX only — the backend is the enforcement point.
 
 ### 3.4 Snowflake per-user OAuth
 
-- The backend exchanges the user's Entra access token for a Snowflake OAuth
-  token via **RFC 8693 token exchange** (`snowflake_service.py`), so
-  Snowflake sees the actual user identity — no shared service account.
+- The backend exchanges the user's bearer token (prod: the Cognito ID
+  token — Snowflake's External OAuth integration must trust the user pool)
+  for a Snowflake OAuth token via **RFC 8693 token exchange**
+  (`snowflake_service.py`), so Snowflake sees the actual user identity —
+  no shared service account.
 - Tokens are **KMS-encrypted at rest** in DynamoDB. Encryption failures
   fail **closed**: a `KmsEncryptionError` returns 503 rather than ever
   storing or using a plaintext token.
@@ -231,7 +237,7 @@ Production runs across **two AWS accounts**:
 │  EventBridge (provisioning events) ─────┼──►│  reconcile pipeline              │
 │  CloudWatch Logs (/ecs/*-backend)       │   │                                  │
 └─────────────────────────────────────────┘   └──────────────────────────────────┘
-         ▲ OIDC (Entra ID)                         ▲ OAuth token exchange (Snowflake)
+         ▲ Cognito (SAML ← Azure AD)               ▲ OAuth token exchange (Snowflake)
 ```
 
 A **single-account deployment** is also supported: leave
@@ -311,12 +317,12 @@ The backend container gets its configuration two ways
   bucket names, all `*_MOCK_MODE=false`, Snowflake defaults, the job-token
   secret prefix, the dataplane runtime role ARN.
 - **Container secrets** — pulled at task start by the execution role:
-  - SSM parameters under `/ml-platform/*`: Entra tenant/client/audience,
+  - SSM parameters under `/ml-platform/*`: Cognito user-pool/app-client IDs,
     CORS origins, EMR Studio URL, SageMaker domain/training image,
     Snowflake account/token-URL/client-id.
   - Secrets Manager: `SNOWFLAKE_OAUTH_CLIENT_SECRET`.
 
-Frontend configuration (`VITE_*`: API base URL, Entra IDs, demo mode) is
+Frontend configuration (`VITE_*`: API base URL, Cognito IDs, demo mode) is
 **baked into the bundle at `docker build` time** — pipeline build args, not
 runtime configuration. Changing it means rebuilding the image.
 
@@ -347,7 +353,7 @@ paths** with the AWS boundary swapped out:
 
 | Concern | Local dev | Production |
 |---|---|---|
-| Auth | `AUTH_MODE=dev` synthetic user from `DEV_USER_*` | Entra ID OIDC, groups claim |
+| Auth | `AUTH_MODE=dev` synthetic user from `DEV_USER_*` | Cognito ID token (Azure AD SAML), `custom:groups` claim |
 | DynamoDB / S3 / STS / KMS / Secrets Manager | LocalStack (`:4566`) | Real AWS |
 | EMR / SageMaker / Snowflake | In-process `*_MOCK_MODE=true` | Real services |
 | Tenant provisioning | `TENANT_PROVISIONING_MOCK_MODE=true` | EventBridge → `tmt-dataplane` |

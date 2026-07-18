@@ -23,7 +23,7 @@ Local dev runs entirely in Docker (LocalStack + backend + frontend) — no host 
 - No backend test suite yet; `scripts/test-api.sh` is the current check.
 
 ## Key conventions
-- Auth: Azure Entra ID OIDC; roles derived from group names `myapp-{tenant}-{role}`. Roles: PlatformAdmin, TenantAdmin, DataScientist, MRM. `AUTH_MODE=dev` bypasses with a synthetic user from `DEV_USER_*` env vars.
+- Auth: AWS Cognito (Amplify Hosted UI) federated to Azure AD via SAML; the backend validates the Cognito ID token, with roles derived from Azure AD group names in `custom:groups` (comma-separated), convention `myapp-{tenant}-{role}`. Roles: PlatformAdmin, TenantAdmin, DataScientist, MRM. `AUTH_MODE=dev` bypasses with a synthetic user from `DEV_USER_*` env vars.
 - Switching dev roles: edit `DEV_USER_ROLE` (and `DEV_USER_TENANT_ID`) in `.env`, then `docker compose restart backend`. The frontend role dropdown is cosmetic; the backend synthetic user is the real role.
 - Tenancy: every backend query is tenant-scoped via `CurrentUser` (see `backend/app/auth/models.py`, `dependencies.py`). Never bypass tenant scoping.
 - DynamoDB: single-table design with GSIs + TTL; repos own all item shapes.

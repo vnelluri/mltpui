@@ -7,12 +7,14 @@
   ``DEV_USER_MEMBERSHIPS`` so the membership switcher can be exercised
   locally). This branch is gated strictly by ``settings.is_dev_auth`` and can
   never activate when ``AUTH_MODE=prod``.
-- ``AUTH_MODE=prod``: the bearer token is validated against Entra ID's JWKS
-  and the user's group NAMES are obtained (directly from the claim, or via
-  Microsoft Graph for GUID claims / >200-group overage). Memberships are then
-  DERIVED from the group-name convention (see services/membership_service.py)
-  — there is no mapping table and no local user directory; AD group
-  membership is the sole source of truth, re-resolved on every request.
+- ``AUTH_MODE=prod``: the bearer token is a **Cognito ID token** (issued by
+  the Hosted UI after Azure AD SAML sign-in), validated against the user
+  pool's JWKS. User info (email, given_name) and the user's Azure AD group
+  NAMES (``custom:groups``, comma-separated) come straight from the token's
+  SAML-mapped attributes. Memberships are then DERIVED from the group-name
+  convention (see services/membership_service.py) — there is no mapping
+  table and no local user directory; AD group membership is the sole source
+  of truth, re-resolved on every request.
 
 Membership switching: a user may hold several (role, tenant) memberships.
 The active one is chosen per request via the ``X-Active-Role`` /
@@ -28,12 +30,7 @@ from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.auth.models import MACHINE_ROLE, CurrentUser, Membership
-from app.auth.oidc import (
-    GraphLookupError,
-    TokenValidationError,
-    get_group_names,
-    validate_token,
-)
+from app.auth.cognito import TokenValidationError, validate_token
 from app.config import settings
 from app.services.membership_service import (
     membership_service,
@@ -158,7 +155,7 @@ async def get_current_user(
             access_token=None,
         )
 
-    # ── Prod mode: Entra JWT validation + convention-based membership ──────
+    # ── Prod mode: Cognito ID-token validation + convention-based membership
     if credentials is None or not credentials.credentials:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -179,18 +176,10 @@ async def get_current_user(
     if not payload.user_id:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Token is missing a subject/object identifier.",
+            detail="Token is missing a subject identifier.",
         )
 
-    try:
-        group_names = get_group_names(payload)
-    except GraphLookupError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail=f"Could not resolve group membership via Microsoft Graph. {exc}",
-        ) from exc
-
-    memberships = membership_service.memberships_from_group_names(group_names)
+    memberships = membership_service.memberships_from_group_names(payload.groups)
     if not memberships:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
@@ -201,7 +190,7 @@ async def get_current_user(
         request,
         user_id=payload.user_id,
         email=payload.user_email or "",
-        name=payload.name or payload.user_email or payload.user_id,
+        name=payload.display_name or payload.user_id,
         memberships=memberships,
         access_token=token,
     )

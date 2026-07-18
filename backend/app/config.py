@@ -2,7 +2,7 @@
 
 All configuration is sourced from environment variables with sensible
 defaults for local development (LocalStack + mock modes). Nothing here
-requires real AWS, Entra ID, EMR, SageMaker or Snowflake to run locally.
+requires real AWS, Cognito, EMR, SageMaker or Snowflake to run locally.
 """
 from __future__ import annotations
 
@@ -37,7 +37,8 @@ class Settings(BaseSettings):
     DEV_USER_MEMBERSHIPS: str = ""
 
     # ── Group-name convention (source of truth for role/tenant) ─────────────
-    # Roles and tenants are DERIVED from Entra security-group NAMES — there is
+    # Roles and tenants are DERIVED from Azure AD security-group NAMES,
+    # delivered in the Cognito ID token's custom:groups claim — there is
     # no mapping table to administer. Access is governed entirely by AD group
     # membership, which the firm's IGA process already reviews/recertifies.
     #
@@ -55,14 +56,16 @@ class Settings(BaseSettings):
     GROUP_NAME_PLATFORM_ADMIN: str = "myapp-platform-admin"
     GROUP_NAME_MRM: str = "myapp-platform-mrm"
 
-    ENTRA_TENANT_ID: Optional[str] = None
-    ENTRA_CLIENT_ID: Optional[str] = None
-    # Client-credentials secret used ONLY for Microsoft Graph group-overage
-    # lookups (users in >200 groups get no `groups` claim in their token).
-    # Requires the GroupMember.Read.All application permission with admin
-    # consent on the app registration.
-    ENTRA_CLIENT_SECRET: Optional[str] = None
-    ENTRA_AUDIENCE: str = "api://ml-training-platform"
+    # ── Cognito (Azure AD SAML federation) ──────────────────────────────────
+    # The frontend signs in via the Cognito Hosted UI (Amplify), which
+    # federates to Azure AD over SAML. The backend validates the Cognito ID
+    # token; user info (email, given_name) and Azure AD group names
+    # (custom:groups, comma-separated) come from the SAML attribute mapping.
+    COGNITO_USER_POOL_ID: Optional[str] = None
+    # The app client ID — the expected `aud` of every ID token.
+    COGNITO_APP_CLIENT_ID: Optional[str] = None
+    # Region of the user pool; falls back to AWS_REGION when unset.
+    COGNITO_REGION: Optional[str] = None
 
     # ── AWS ─────────────────────────────────────────────────────────────────
     AWS_REGION: str = "us-east-1"
@@ -192,19 +195,23 @@ class Settings(BaseSettings):
         return self.AUTH_MODE == "dev"
 
     @property
-    def jwks_url(self) -> Optional[str]:
-        if not self.ENTRA_TENANT_ID:
-            return None
-        return (
-            f"https://login.microsoftonline.com/"
-            f"{self.ENTRA_TENANT_ID}/discovery/v2.0/keys"
-        )
+    def cognito_region(self) -> str:
+        return self.COGNITO_REGION or self.AWS_REGION
 
     @property
     def issuer(self) -> Optional[str]:
-        if not self.ENTRA_TENANT_ID:
+        if not self.COGNITO_USER_POOL_ID:
             return None
-        return f"https://login.microsoftonline.com/{self.ENTRA_TENANT_ID}/v2.0"
+        return (
+            f"https://cognito-idp.{self.cognito_region}.amazonaws.com/"
+            f"{self.COGNITO_USER_POOL_ID}"
+        )
+
+    @property
+    def jwks_url(self) -> Optional[str]:
+        if not self.issuer:
+            return None
+        return f"{self.issuer}/.well-known/jwks.json"
 
     @property
     def snowflake_token_url(self) -> Optional[str]:

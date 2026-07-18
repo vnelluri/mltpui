@@ -9,10 +9,11 @@ tenancy and roles derived entirely from **Azure Entra ID** group membership.
 
 - **Backend:** Python 3.12 · FastAPI (async) · DynamoDB single-table design (boto3)
 - **Frontend:** React 18 · TypeScript · Vite · Tailwind CSS
-- **Auth:** Azure Entra ID (OIDC / OAuth2 PKCE); role + tenant **derived from
-  security-group names** (`myapp-{tenant}-{role}` convention) — nothing to
-  administer in the app, and users with several groups can switch role/tenant
-  from the topbar
+- **Auth:** AWS Cognito + Amplify, federated to Azure AD via **SAML** (Hosted
+  UI); the backend validates the Cognito ID token, with role + tenant
+  **derived from security-group names** (`myapp-{tenant}-{role}` convention,
+  from the `custom:groups` claim) — nothing to administer in the app, and
+  users with several groups can switch role/tenant from the topbar
 - **Data:** Snowflake via OAuth token-exchange (per-user tokens, KMS-encrypted)
 - **Compute:** EMR Serverless / SageMaker Training (launched from the portal)
 - **Deploy target:** AWS ECS (Fargate) — no Lambda, no Step Functions
@@ -27,11 +28,11 @@ tenancy and roles derived entirely from **Azure Entra ID** group membership.
                                ┌────────────────────────────────────────┐
                                │            External providers          │
                                │                                        │
-                               │   Azure Entra ID      Snowflake        │
-                               │   (identity, groups)  (data, OAuth)    │
+                               │  Cognito ◄─SAML─ Azure AD   Snowflake  │
+                               │  (token issuer)  (identity) (data)     │
                                └───────▲───────────────────▲────────────┘
-                                       │ OIDC/JWT          │ OAuth token-exchange
-                                       │ (groups claim)    │ (per-user identity)
+                                       │ Cognito ID token  │ OAuth token-exchange
+                                       │ (custom:groups)   │ (per-user identity)
                                        │                   │
    ┌─────────┐   HTTPS      ┌──────────┴─────────┐   ┌─────┴──────────────┐
    │ Browser │ ───────────► │  Frontend (ECS)    │   │   Backend (ECS)    │
@@ -50,7 +51,7 @@ tenancy and roles derived entirely from **Azure Entra ID** group membership.
    ── Local development (docker compose) ────────────────────────────────────────
    LocalStack replaces DynamoDB · S3 · STS · KMS · Secrets Manager.
    EMR / SageMaker / Snowflake are replaced by in-process MOCK modes.
-   Entra ID is bypassed by AUTH_MODE=dev (synthetic user from env vars).
+   Cognito/Azure AD SSO is bypassed by AUTH_MODE=dev (synthetic user from env vars).
 ```
 
 In local dev, everything inside the AWS boundary is emulated by **LocalStack**,
@@ -71,7 +72,7 @@ cd ml-training-platform
 ```
 
 Then open **http://localhost:3000**. You are **already logged in as Platform
-Admin** via `AUTH_MODE=dev` — no Entra ID setup needed.
+Admin** via `AUTH_MODE=dev` — no Cognito/Azure AD setup needed.
 
 | Service    | URL                          |
 |------------|------------------------------|
@@ -187,12 +188,16 @@ driven by `DEV_USER_ROLE`.
 
 ---
 
-## Entra ID App Registration setup (production only)
+## Cognito + Azure AD SAML SSO setup (production only)
 
-Not needed locally. For production, tenancy and role are **derived from Entra
-security-group NAMES** following a naming convention — there are no App Roles
-and no mapping table to administer. Access is governed entirely by AD group
-membership, which your IGA process already reviews and recertifies.
+Not needed locally. Sign-in goes through the **Cognito Hosted UI** (Amplify),
+which federates to **Azure AD over SAML**; the backend validates the Cognito
+**ID token**. Tenancy and role are **derived from Azure AD security-group
+NAMES** delivered in the token's `custom:groups` claim (comma-separated),
+following a naming convention — there are no App Roles and no mapping table
+to administer. Access is governed entirely by AD group membership, which
+your IGA process already reviews and recertifies. Full walkthrough:
+`docs/COGNITO_SAML_SSO.md`.
 
 **The naming convention** (configurable — see `GROUP_NAME_*` env vars):
 
@@ -210,25 +215,24 @@ A group naming a tenant that doesn't exist as a Tenant record grants nothing.
 > reserved to your governed provisioning (IGA) process — confirm this with
 > whoever owns AD group naming before going live.
 
-Setup steps:
+Setup steps (details in `docs/COGNITO_SAML_SSO.md`):
 
-1. **Register the API application** in Entra ID.
-2. **Expose an API** with two scopes: `ml-platform.read` and `ml-platform.write`.
-   Use the Application ID URI `api://ml-training-platform` (matches
-   `ENTRA_AUDIENCE`).
-3. **Token configuration → optional claims** (ID + access token): `email`,
-   `given_name`, `family_name`, `oid`, `tid`, and **`groups`**.
-4. **Token configuration → Groups claim:** enable **Security groups**. If your
-   groups are synced from on-prem AD, prefer emitting the claim as
-   **sAMAccountName** — the token then carries names directly and no Graph
-   call is needed at login. Cloud-only groups emit Object IDs; the backend
-   resolves their names via Microsoft Graph (`directoryObjects/getByIds`,
-   cached ~15 min).
-5. **Microsoft Graph access** (needed for GUID claims and for users in >200
-   groups, where Entra emits an overage pointer instead of a `groups` claim):
-   a **client secret** on the app registration (`ENTRA_CLIENT_SECRET`) and
-   the **GroupMember.Read.All** application permission with admin consent.
-6. **Create the AD groups** per the convention and add users to them. That's
+1. **Create the Cognito user pool** with a Hosted UI domain, an app client
+   (auth-code grant, scopes `openid email profile`), and a custom attribute
+   **`custom:groups`** (String, max length 2048).
+2. **Create the Azure AD enterprise application** (SAML) pointing at the
+   pool: ACS URL
+   `https://<domain>.auth.<region>.amazoncognito.com/saml2/idpresponse`,
+   entity ID `urn:amazon:cognito:sp:<user-pool-id>`.
+3. **Emit SAML claims**: email, given name, and a **groups** claim carrying
+   security-group **names** (sAMAccountName for AD-synced groups). Scope the
+   claim to *groups assigned to the application* to stay under Azure's
+   150-group SAML token limit.
+4. **Add the SAML identity provider** to the user pool (name it `AzureAD`,
+   or set `VITE_COGNITO_SAML_PROVIDER`) and map attributes:
+   email → `email`, given name → `given_name`, groups → `custom:groups`.
+   Multi-valued groups arrive comma-separated in the ID token.
+5. **Create the AD groups** per the convention and add users to them. That's
    the entire onboarding flow — there is nothing to configure in the app.
 
 When a user's group membership changes in Entra, their access changes on their
@@ -244,21 +248,21 @@ more than AD does. If no group matches the convention, the API returns
 
 ## Snowflake OAuth integration setup
 
-The platform is an OAuth client against Snowflake, exchanging each user's Entra
-access token for a Snowflake OAuth token (RFC 8693 token-exchange) so jobs and
-queries run under the **submitting user's** Snowflake identity — not a shared
-service account.
+The platform is an OAuth client against Snowflake, exchanging each user's
+bearer token (prod: the Cognito ID token) for a Snowflake OAuth token
+(RFC 8693 token-exchange) so jobs and queries run under the **submitting
+user's** Snowflake identity — not a shared service account.
 
 1. As **ACCOUNTADMIN**, run `backend/scripts/setup_snowflake_integration.sql`.
-   It creates `SECURITY INTEGRATION ml_platform_oauth` (custom OAuth client, Entra
-   as trusted issuer), an `ML_PLATFORM_ROLE`, resource monitors, and warehouse
+   It creates `SECURITY INTEGRATION ml_platform_oauth` (custom OAuth client),
+   an `ML_PLATFORM_ROLE`, resource monitors, and warehouse
    grants, and ends with `DESCRIBE SECURITY INTEGRATION ml_platform_oauth;`.
 2. Copy the client ID/secret shown by `DESCRIBE SECURITY INTEGRATION` into
    `SNOWFLAKE_OAUTH_CLIENT_ID` / `SNOWFLAKE_OAUTH_CLIENT_SECRET` in `.env`.
-3. Configure the Entra App Registration as a **trusted identity provider** in the
-   Snowflake integration.
-4. Test with `POST /snowflake/connect` using a real Entra token and confirm the
-   returned `snowflakeUsername` matches the expected Entra UPN.
+3. Configure the **Cognito user pool** as a **trusted identity provider**
+   (External OAuth issuer/JWKS) in the Snowflake integration.
+4. Test with `POST /snowflake/connect` using a real Cognito ID token and
+   confirm the returned `snowflakeUsername` matches the expected user.
 
 Tokens are encrypted with AWS KMS (`KMS_SNOWFLAKE_KEY_ARN`) before being cached
 in the `SnowflakeTokenCache` items (auto-expired by DynamoDB TTL on `expiresAt`).
@@ -269,7 +273,9 @@ ARN only, TTL-bound, deleted after the job) — never as plaintext env vars.
 
 ## Moving from local dev to production — checklist
 
-- [ ] Create a real Entra ID App Registration with the `groups` claim enabled.
+- [ ] Create the Cognito user pool + Azure AD SAML enterprise application
+      (attributes: email, given name, groups → `custom:groups`) — see
+      `docs/COGNITO_SAML_SSO.md`.
 - [ ] Set `AUTH_MODE=prod` and `VITE_DEMO_MODE=false`.
 - [ ] Remove the LocalStack endpoints: `DYNAMODB_ENDPOINT_URL`,
       `S3_ENDPOINT_URL`, `KMS_ENDPOINT_URL`, `SECRETS_MANAGER_ENDPOINT_URL`.
@@ -366,7 +372,7 @@ ARN only, TTL-bound, deleted after the job) — never as plaintext env vars.
    - Frontend task role: minimal (static serving only).
 
 5. **SSM Parameter Store / Secrets Manager** — create the parameters referenced
-   by the task definitions' `secrets[].valueFrom` under `/ml-platform/...` (Entra,
+   by the task definitions' `secrets[].valueFrom` under `/ml-platform/...` (Cognito,
    Snowflake, EMR, SageMaker, KMS, CORS). Secrets (client secret) go in Secrets
    Manager; the rest in SSM.
 
@@ -417,10 +423,9 @@ under `infrastructure/ecs/` has been removed).
 
 | Variable | Description | Local default | Prod example |
 |---|---|---|---|
-| `ENTRA_TENANT_ID` | Entra directory (tenant) ID | *(blank)* | `11111111-2222-3333-4444-555555555555` |
-| `ENTRA_CLIENT_ID` | App registration client ID | *(blank)* | `66666666-7777-8888-9999-000000000000` |
-| `ENTRA_CLIENT_SECRET` | Client secret for Graph group-overage lookups (Secrets Manager) | *(blank)* | *(Secrets Manager)* |
-| `ENTRA_AUDIENCE` | Expected JWT audience | `api://ml-training-platform` | `api://ml-training-platform` |
+| `COGNITO_USER_POOL_ID` | Cognito user pool ID | *(blank)* | `us-east-1_AbCdEfGhI` |
+| `COGNITO_APP_CLIENT_ID` | App client ID — expected ID-token audience | *(blank)* | `1a2b3c4d5e6f7g8h9i0j` |
+| `COGNITO_REGION` | User pool region (blank → `AWS_REGION`) | *(blank)* | `us-east-1` |
 | `AUTH_MODE` | `dev` bypass or `prod` JWT validation | `dev` | `prod` |
 | `DEV_USER_ID` | Synthetic user id (dev only) | `dev-user-001` | *(unset)* |
 | `DEV_USER_EMAIL` | Synthetic user email (dev only) | `dev@local.test` | *(unset)* |
@@ -466,8 +471,10 @@ under `infrastructure/ecs/` has been removed).
 | `SECRETS_MANAGER_ENDPOINT_URL` | Secrets Manager endpoint | `http://localstack:4566` | *(blank)* |
 | `SECRETS_MANAGER_JOB_TOKEN_PREFIX` | Prefix for per-job token secrets | `ml-platform/job-tokens/` | `ml-platform/job-tokens/` |
 | `VITE_API_BASE_URL` | Backend base URL (frontend) | `http://localhost:8000` | `https://ml.truist.example` |
-| `VITE_ENTRA_TENANT_ID` | Entra tenant for MSAL (frontend) | *(blank)* | `11111111-…` |
-| `VITE_ENTRA_CLIENT_ID` | Entra client for MSAL (frontend) | *(blank)* | `66666666-…` |
+| `VITE_COGNITO_USER_POOL_ID` | Cognito user pool ID (frontend) | *(blank)* | `us-east-1_AbCdEfGhI` |
+| `VITE_COGNITO_CLIENT_ID` | Cognito app client ID (frontend) | *(blank)* | `1a2b3c4d5e6f…` |
+| `VITE_COGNITO_DOMAIN` | Hosted UI domain, no scheme (frontend) | *(blank)* | `myapp.auth.us-east-1.amazoncognito.com` |
+| `VITE_COGNITO_SAML_PROVIDER` | SAML IdP name in the user pool (frontend) | `AzureAD` | `AzureAD` |
 | `VITE_DEMO_MODE` | Show role-selector instead of SSO | `true` | `false` |
 
 ---
@@ -476,7 +483,7 @@ under `infrastructure/ecs/` has been removed).
 
 In local dev (`AUTH_MODE=dev`) **no auth header is required** — the backend
 injects the synthetic user. Against production, add
-`-H "Authorization: Bearer <entra-access-token>"`.
+`-H "Authorization: Bearer <cognito-id-token>"`.
 
 **Create a tenant** (PlatformAdmin)
 

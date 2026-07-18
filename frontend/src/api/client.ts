@@ -8,9 +8,9 @@ import axios, {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:8000';
 
-// A pluggable token provider. AuthContext registers a real MSAL access-token
-// getter in prod mode. In demo mode this stays null and no Authorization header
-// is sent — the backend (AUTH_MODE=dev) ignores auth headers entirely.
+// A pluggable token provider. AuthContext registers a Cognito ID-token getter
+// (via Amplify) in prod mode. In demo mode this stays null and no Authorization
+// header is sent — the backend (AUTH_MODE=dev) ignores auth headers entirely.
 type TokenProvider = () => Promise<string | null>;
 let tokenProvider: TokenProvider | null = null;
 

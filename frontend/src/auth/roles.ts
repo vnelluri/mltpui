@@ -30,7 +30,7 @@ export function isRole(value: unknown): value is Role {
 
 /**
  * Resolve the highest-privilege role from a list of role strings.
- * Used only for display/debug when decoding the MSAL groups claim — the
+ * Used only for display/debug when decoding the custom:groups claim — the
  * authoritative role always comes from GET /auth/me.
  */
 export function parseTenantRole(roles: string[]): Role | null {

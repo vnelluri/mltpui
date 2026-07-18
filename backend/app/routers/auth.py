@@ -43,7 +43,7 @@ async def token_info(request: Request) -> Dict[str, Any]:
     auth_header = request.headers.get("authorization", "")
     if auth_header.lower().startswith("bearer "):
         token = auth_header[7:]
-        from app.auth.oidc import TokenValidationError, decode_unverified
+        from app.auth.cognito import TokenValidationError, decode_unverified
 
         try:
             payload = decode_unverified(token)
@@ -57,9 +57,9 @@ async def token_info(request: Request) -> Dict[str, Any]:
     return {
         "source": "dev_synthetic_user",
         "claims": {
-            "oid": settings.DEV_USER_ID,
+            "sub": settings.DEV_USER_ID,
             "email": settings.DEV_USER_EMAIL,
-            "name": settings.DEV_USER_NAME,
+            "given_name": settings.DEV_USER_NAME,
         },
         "groups": [],
         "note": (
@@ -75,7 +75,7 @@ async def token_info(request: Request) -> Dict[str, Any]:
 async def get_snowflake_token(
     user: CurrentUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """Exchange the current user's Entra token for a Snowflake OAuth token.
+    """Exchange the current user's bearer token for a Snowflake OAuth token.
 
     The raw token is never returned — only the resolved username and expiry.
     """

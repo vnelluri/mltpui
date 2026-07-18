@@ -23,9 +23,8 @@ locals {
   # SSM-backed config injected as container secrets (matches app/config.py).
   ssm_secrets = merge(
     {
-      ENTRA_TENANT_ID           = "${local.ssm_arn}/entra/tenant-id"
-      ENTRA_CLIENT_ID           = "${local.ssm_arn}/entra/client-id"
-      ENTRA_AUDIENCE            = "${local.ssm_arn}/entra/audience"
+      COGNITO_USER_POOL_ID      = "${local.ssm_arn}/cognito/user-pool-id"
+      COGNITO_APP_CLIENT_ID     = "${local.ssm_arn}/cognito/app-client-id"
       CORS_ALLOWED_ORIGINS      = "${local.ssm_arn}/cors/allowed-origins"
       EMR_STUDIO_URL            = "${local.ssm_arn}/emr/studio-url"
       SAGEMAKER_DOMAIN_ID       = "${local.ssm_arn}/sagemaker/domain-id"
