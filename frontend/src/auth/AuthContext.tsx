@@ -45,6 +45,17 @@ const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 const DEMO_AUTH_KEY = 'mlplatform.demoAuthenticated';
 const DEMO_ROLE_KEY = 'mlplatform.demoRole';
+const SIGNED_OUT_KEY = 'mlplatform.signedOut';
+
+/**
+ * True after an explicit sign-out in this tab. The login page auto-initiates
+ * SSO for unauthenticated visitors; without this flag, logging out would
+ * bounce straight back through the Hosted UI (silently, if the Azure AD
+ * session is still alive) and sign the user right back in.
+ */
+export function wasExplicitlySignedOut(): boolean {
+  return sessionStorage.getItem(SIGNED_OUT_KEY) === 'true';
+}
 
 /**
  * Parse the `custom:groups` ID-token claim: a comma-separated string of
@@ -222,6 +233,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const login = useCallback(async () => {
     setStatus('authenticating');
     setError(null);
+    sessionStorage.removeItem(SIGNED_OUT_KEY);
     if (DEMO_MODE) {
       localStorage.setItem(DEMO_AUTH_KEY, 'true');
       await refreshMe();
@@ -239,6 +251,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const logout = useCallback(async () => {
     localStorage.removeItem(DEMO_AUTH_KEY);
+    sessionStorage.setItem(SIGNED_OUT_KEY, 'true'); // suppress the login page's auto-SSO
     setActiveMembership(null); // never carry a role/tenant selection across users
     setUser(null);
     setGroups([]);

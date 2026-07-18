@@ -1,6 +1,6 @@
 import { useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { useAuth } from '../auth/AuthContext';
+import { useAuth, wasExplicitlySignedOut } from '../auth/AuthContext';
 import { ROLES, ROLE_LABELS, ROLE_DESCRIPTIONS, landingPathForRole } from '../auth/roles';
 import type { Role } from '../types/platform';
 import { Button } from '../components/shared/ui';
@@ -17,6 +17,17 @@ export function LoginPage() {
       navigate('/no-access', { replace: true });
     }
   }, [status, user, navigate]);
+
+  // Auto-initiate SSO: an unauthenticated visitor in prod mode goes straight
+  // to the Hosted UI instead of clicking the button (silent if the Azure AD
+  // session is still alive). Suppressed after an explicit sign-out or an SSO
+  // error — those show the button, so logout and failures can't loop back
+  // into sign-in.
+  useEffect(() => {
+    if (!demoMode && status === 'unauthenticated' && !error && !wasExplicitlySignedOut()) {
+      void login();
+    }
+  }, [demoMode, status, error, login]);
 
   return (
     <div className="flex min-h-screen bg-bg-dark">

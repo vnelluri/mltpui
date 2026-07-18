@@ -126,6 +126,10 @@ talks to the Hosted UI domain and Azure AD on the user's own network.
 - `frontend/src/auth/AuthContext.tsx` — `signInWithRedirect` /
   `fetchAuthSession` / `signOut`, Hub listener for the Hosted UI callback,
   `custom:groups` parsing, ID-token Bearer provider.
+- `frontend/src/pages/LoginPage.tsx` — auto-initiates SSO for
+  unauthenticated visitors in prod mode (silent when the Azure AD session
+  is alive); the sign-in button remains as the fallback after an explicit
+  sign-out or an SSO failure, so neither can loop back into sign-in.
 - `backend/app/auth/cognito.py` — JWKS validation, `token_use=id`
   enforcement, `parse_groups_claim`.
 - `backend/app/dependencies.py` — memberships from `payload.groups`,
