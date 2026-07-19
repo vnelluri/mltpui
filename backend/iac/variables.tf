@@ -98,9 +98,14 @@ variable "dataplane_runtime_role_arn" {
 }
 
 variable "provisioning_event_bus_arn" {
-  description = "EventBridge bus ARN for TenantProvisioningRequested events."
+  description = "EventBridge bus ARN for TenantProvisioningRequested events. Null uses the account's default bus. The bus NAME the app publishes to is derived from this same ARN, so IAM grant and publish target can never disagree."
   type        = string
   default     = null
+}
+
+variable "platform_api_base_url" {
+  description = "Public base URL of this API (the ALB DNS name or friendly domain, e.g. https://mlplatform.example.com). Injected into training jobs as ML_PLATFORM_API_URL so they can log metrics/params/tags back with their run token. Required: without it, run-token logging silently no-ops in every training job."
+  type        = string
 }
 
 variable "log_retention_days" {

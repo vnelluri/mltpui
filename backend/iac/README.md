@@ -24,6 +24,9 @@ module "backend" {
   # ARN pattern of the per-tenant execution roles created by the
   # tmt-dataplane repo — required for iam:PassRole to EMR/SageMaker.
   tenant_execution_role_arn_pattern = "arn:aws:iam::${var.dataplane_account_id}:role/ml-platform-tenant-*-exec"
+  # Public base URL of the API, injected into training jobs as
+  # ML_PLATFORM_API_URL — required for run-token metric logging.
+  platform_api_base_url = "https://${aws_lb.main.dns_name}"
 }
 ```
 
@@ -32,6 +35,9 @@ Notes:
 - The task role includes `events:PutEvents` (tenant provisioning requests)
   and `iam:PassRole` restricted to the per-tenant execution-role name pattern
   — without the PassRole grant, real-mode job submission fails.
+- The provisioning event-bus NAME the app publishes to is derived from
+  `provisioning_event_bus_arn`, so the IAM grant and the publish target
+  always refer to the same bus (leave null for the account default bus).
 - Secrets/config are read from SSM Parameter Store / Secrets Manager under
   `ssm_parameter_prefix` (same paths as the README's AWS setup section).
 - Per-tenant compute (EMR Serverless applications, execution roles, KMS keys)
