@@ -258,6 +258,13 @@ class JobService:
         # the job with a different date).
         if job.asOfDate:
             env["AS_OF_DATE"] = job.asOfDate
+        # Where the run's inputs live and where the trained artifact must be
+        # written. SageMaker also receives the output path via
+        # OutputDataConfig; on EMR these env vars are the only channel.
+        if job.s3InputPath:
+            env["ML_PLATFORM_S3_INPUT_PATH"] = job.s3InputPath
+        if job.s3OutputPath:
+            env["ML_PLATFORM_S3_OUTPUT_PATH"] = job.s3OutputPath
         # Everything the training code needs to log metrics back: which run
         # it is, where the API lives, and where its run token waits.
         if job.experimentId:
