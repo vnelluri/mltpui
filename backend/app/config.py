@@ -9,7 +9,7 @@ from __future__ import annotations
 from functools import lru_cache
 from typing import List, Optional
 
-from pydantic import field_validator
+from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -188,6 +188,43 @@ class Settings(BaseSettings):
         if value not in {"dev", "prod"}:
             raise ValueError("AUTH_MODE must be 'dev' or 'prod'")
         return value
+
+    # Every mock/bypass flag defaults to the local-dev value and env-var typos
+    # are silently ignored (extra="ignore"), so a prod deployment missing one
+    # variable would otherwise degrade SILENTLY: token audience/issuer checks
+    # skipped, jobs fake-succeeding, artifact URIs unverified. Refuse to boot
+    # instead — a crashed task in the ECS events is loud; a mock-mode prod is
+    # invisible.
+    @model_validator(mode="after")
+    def _refuse_unsafe_prod_config(self) -> "Settings":
+        if self.AUTH_MODE != "prod":
+            return self
+        problems = []
+        if not self.COGNITO_USER_POOL_ID:
+            problems.append(
+                "COGNITO_USER_POOL_ID is not set (issuer verification would be skipped)"
+            )
+        if not self.COGNITO_APP_CLIENT_ID:
+            problems.append(
+                "COGNITO_APP_CLIENT_ID is not set (audience verification would be skipped)"
+            )
+        for flag in (
+            "EMR_MOCK_MODE",
+            "SAGEMAKER_MOCK_MODE",
+            "SNOWFLAKE_MOCK_MODE",
+            "TENANT_PROVISIONING_MOCK_MODE",
+            "ARTIFACT_URI_MOCK_MODE",
+        ):
+            if getattr(self, flag):
+                problems.append(f"{flag} is true")
+        if problems:
+            raise ValueError(
+                "Refusing to start with AUTH_MODE=prod and an unsafe "
+                "configuration: " + "; ".join(problems) + ". Set the missing "
+                "variables (and every *_MOCK_MODE=false) explicitly, or use "
+                "AUTH_MODE=dev for local development."
+            )
+        return self
 
     # ── Derived helpers ─────────────────────────────────────────────────────
     @property

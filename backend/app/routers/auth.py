@@ -14,7 +14,7 @@ router = APIRouter(prefix="/auth", tags=["auth"])
 
 
 @router.get("/me", response_model=CurrentUser)
-async def get_me(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
+def get_me(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
     """The resolved principal, with memberships enriched with tenant display
     names (group names only carry tenant IDs; the Tenant table is where a
     meaningful name is assigned). Done here rather than on every request —
@@ -33,7 +33,7 @@ async def get_me(user: CurrentUser = Depends(get_current_user)) -> CurrentUser:
 
 
 @router.get("/token-info")
-async def token_info(request: Request) -> Dict[str, Any]:
+def token_info(request: Request) -> Dict[str, Any]:
     """Decoded JWT claims for local debugging. Disabled outside dev mode."""
     if not settings.is_dev_auth:
         raise HTTPException(
@@ -72,7 +72,7 @@ async def token_info(request: Request) -> Dict[str, Any]:
 
 
 @router.get("/snowflake-token")
-async def get_snowflake_token(
+def get_snowflake_token(
     user: CurrentUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
     """Exchange the current user's bearer token for a Snowflake OAuth token.

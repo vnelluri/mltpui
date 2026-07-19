@@ -28,7 +28,11 @@ from app.middleware.tenant_scope import enforce_tenant_access, resolve_write_ten
 from app.services.audit_service import audit_service
 from app.services.job_service import TenantNotProvisionedError, job_service
 from app.services.run_token_service import run_token_service
-from app.services.snowflake_service import KmsCipher
+from app.services.snowflake_service import (
+    KmsCipher,
+    SqlValidationError,
+    validate_identifier,
+)
 
 logger = logging.getLogger("ml_platform.jobs")
 
@@ -42,6 +46,10 @@ _exp_repo = ExperimentRepository()
 # with no explicit experiment context land in a stable, well-known per-tenant
 # "default" experiment rather than each spawning a brand-new one.
 _DEFAULT_EXPERIMENT_ID_PREFIX = "default-job-runs"
+
+# Spark memory sizes ("4g", "4096m") — these values are interpolated into the
+# EMR spark-submit parameter string, so anything else is rejected up front.
+_SPARK_MEMORY_RE = re.compile(r"^\d+[gmGM]$")
 
 
 def _get_or_create_default_experiment(tenant_id: str, user: CurrentUser) -> Experiment:
@@ -174,7 +182,7 @@ def _resolve_target_tenant(body: JobCreateRequest, user: CurrentUser) -> Tenant:
 
 
 @router.post("", response_model=TrainingJob, status_code=status.HTTP_201_CREATED)
-async def submit_job(
+def submit_job(
     body: JobCreateRequest,
     request: Request,
     user: CurrentUser = Depends(require_role("DataScientist")),
@@ -190,6 +198,32 @@ async def submit_job(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="asOfDate must be an ISO date (YYYY-MM-DD).",
         )
+
+    # These values are carried to the job verbatim — on EMR inside the
+    # spark-submit parameter string — so free-form input would mangle the
+    # dispatch (or smuggle extra --conf flags). Validate them up front.
+    for field_name, value in (
+        ("driverMemory", body.driverMemory),
+        ("executorMemory", body.executorMemory),
+    ):
+        if value and not _SPARK_MEMORY_RE.match(value):
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"{field_name} must be a Spark memory size like '4g' or '4096m'.",
+            )
+    for field_name, value in (
+        ("snowflakeDatabase", body.snowflakeDatabase),
+        ("snowflakeSchema", body.snowflakeSchema),
+        ("snowflakeWarehouse", body.snowflakeWarehouse),
+        ("snowflakeTable", body.snowflakeTable),
+    ):
+        if value:
+            try:
+                validate_identifier(value, field_name)
+            except SqlValidationError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)
+                ) from exc
 
     job = TrainingJob(
         # Sequential, human-friendly id (job-0001, job-0002, … platform-wide)
@@ -295,6 +329,11 @@ async def submit_job(
         if snowflake_token is not None:
             secret_payload["snowflake_token"] = snowflake_token
             secret_payload["snowflakeExpiresAt"] = snowflake_token_expires_at
+            # Free-text SQL travels in the secret, not the job environment:
+            # EMR env vars ride inside the space-joined spark-submit parameter
+            # string, which real SQL (spaces, quotes) would break.
+            if job.snowflakeSql:
+                secret_payload["snowflakeSql"] = job.snowflakeSql
         secret_arn = job_service.store_job_secret(job.jobId, tenant_id, secret_payload)
         job = job_service.submit(job, tenant, secret_arn)
     except TenantNotProvisionedError as exc:
@@ -323,7 +362,7 @@ async def submit_job(
 
 
 @router.get("")
-async def list_jobs(
+def list_jobs(
     page: int = 1,
     pageSize: int = 20,
     # Aliased: the module already imports fastapi.status, so the parameter
@@ -377,7 +416,7 @@ def _get_owned_job(job_id: str, user: CurrentUser) -> TrainingJob:
 
 
 @router.get("/{job_id}", response_model=TrainingJob)
-async def get_job(job_id: str, user: CurrentUser = Depends(get_current_user)) -> TrainingJob:
+def get_job(job_id: str, user: CurrentUser = Depends(get_current_user)) -> TrainingJob:
     job = _get_owned_job(job_id, user)
     previous_status = job.status
     updated = job_service.live_status(job)
@@ -388,7 +427,7 @@ async def get_job(job_id: str, user: CurrentUser = Depends(get_current_user)) ->
 
 
 @router.post("/{job_id}/cancel", response_model=TrainingJob)
-async def cancel_job(
+def cancel_job(
     job_id: str,
     request: Request,
     user: CurrentUser = Depends(require_role("TenantAdmin", "DataScientist")),
@@ -414,6 +453,6 @@ async def cancel_job(
 
 
 @router.get("/{job_id}/logs")
-async def get_job_logs(job_id: str, user: CurrentUser = Depends(get_current_user)) -> Dict[str, str]:
+def get_job_logs(job_id: str, user: CurrentUser = Depends(get_current_user)) -> Dict[str, str]:
     job = _get_owned_job(job_id, user)
     return {"logStreamUrl": job_service.log_stream_url(job)}

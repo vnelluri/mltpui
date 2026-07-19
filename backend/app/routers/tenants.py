@@ -70,7 +70,7 @@ class ProvisioningWriteBackRequest(BaseModel):
 
 
 @router.post("", response_model=Tenant, status_code=status.HTTP_201_CREATED)
-async def create_tenant(
+def create_tenant(
     body: TenantCreateRequest,
     request: Request,
     user: CurrentUser = Depends(require_role("PlatformAdmin")),
@@ -117,7 +117,7 @@ async def create_tenant(
 
 
 @router.put("/{tenant_id}/provisioning", response_model=Tenant)
-async def complete_provisioning(
+def complete_provisioning(
     tenant_id: str,
     body: ProvisioningWriteBackRequest,
     request: Request,
@@ -166,7 +166,7 @@ async def complete_provisioning(
 
 
 @router.get("")
-async def list_tenants(
+def list_tenants(
     page: int = 1,
     pageSize: int = 20,
     user: CurrentUser = Depends(require_role("PlatformAdmin")),
@@ -183,7 +183,7 @@ async def list_tenants(
 
 
 @router.get("/{tenant_id}", response_model=Tenant)
-async def get_tenant(
+def get_tenant(
     tenant_id: str, user: CurrentUser = Depends(require_role("TenantAdmin"))
 ) -> Tenant:
     tenant = _tenant_repo.get(tenant_id)
@@ -194,7 +194,7 @@ async def get_tenant(
 
 
 @router.put("/{tenant_id}", response_model=Tenant)
-async def update_tenant(
+def update_tenant(
     tenant_id: str,
     body: TenantUpdateRequest,
     request: Request,
@@ -225,7 +225,7 @@ async def update_tenant(
 
 
 @router.post("/{tenant_id}/suspend", response_model=Tenant)
-async def suspend_tenant(
+def suspend_tenant(
     tenant_id: str,
     request: Request,
     user: CurrentUser = Depends(require_role("PlatformAdmin")),
@@ -245,7 +245,7 @@ async def suspend_tenant(
 
 
 @router.post("/{tenant_id}/reactivate", response_model=Tenant)
-async def reactivate_tenant(
+def reactivate_tenant(
     tenant_id: str,
     request: Request,
     user: CurrentUser = Depends(require_role("PlatformAdmin")),
@@ -265,7 +265,7 @@ async def reactivate_tenant(
 
 
 @router.get("/{tenant_id}/metrics")
-async def tenant_metrics(
+def tenant_metrics(
     tenant_id: str, user: CurrentUser = Depends(require_role("TenantAdmin"))
 ) -> Dict[str, Any]:
     tenant = _tenant_repo.get(tenant_id)
@@ -302,7 +302,7 @@ _MOCK_MAX_VCPU = 400
 
 
 @router.get("/{tenant_id}/compute-stats")
-async def tenant_compute_stats(
+def tenant_compute_stats(
     tenant_id: str,
     # DataScientist may read it too — the DS dashboard shows a slim version.
     user: CurrentUser = Depends(require_role("TenantAdmin", "DataScientist")),

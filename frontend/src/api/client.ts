@@ -90,6 +90,11 @@ interface RetryConfig extends AxiosRequestConfig {
 }
 
 function isRetryable(error: AxiosError): boolean {
+  // Only idempotent reads are safe to replay. A timed-out or 5xx'd POST may
+  // have succeeded server-side (e.g. POST /jobs dispatching a real training
+  // run) — retrying it would duplicate the resource.
+  const method = (error.config?.method ?? '').toLowerCase();
+  if (method !== 'get' && method !== 'head') return false;
   // No response => network/transient error.
   if (!error.response) return true;
   const status = error.response.status;

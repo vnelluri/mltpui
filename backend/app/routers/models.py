@@ -57,15 +57,23 @@ def _scope_tenant(user: CurrentUser, requested_tenant_id: Optional[str]) -> str:
     return user.tenantId
 
 
-def _validate_artifact_uri(artifact_uri: str, field: str = "artifactUri") -> str:
+def _validate_artifact_uri(
+    artifact_uri: str, tenant_id: str, field: str = "artifactUri"
+) -> str:
     """Reject artifact URIs that don't point at anything real in S3.
 
     The registry is what MRM reviews against — a free-text URI that nobody
     verified makes every downstream governance step untrustworthy. Accepts
     either an exact object key or a prefix containing at least one object.
+    Within the shared artifacts bucket the key must live under the target
+    tenant's own prefix — the same confinement /s3/browse enforces — so a
+    model can neither reference another tenant's artifact nor be used to
+    probe for the existence of another tenant's keys. (A tenant-specific
+    bucket from the provisioning pipeline is not prefix-checked; the
+    existence check still applies.)
     Returns the normalized (trimmed) URI; errors name the offending field.
     ARTIFACT_URI_MOCK_MODE=true (testing only) skips the S3 existence
-    lookup, keeping just the format checks.
+    lookup, keeping the format and prefix checks.
     """
     artifact_uri = artifact_uri.strip()
     if not artifact_uri.startswith("s3://"):
@@ -80,6 +88,14 @@ def _validate_artifact_uri(artifact_uri: str, field: str = "artifactUri") -> str
             detail=(
                 f"{field} must include a bucket AND a key/prefix after it — got "
                 f"'{artifact_uri}'. Expected e.g. s3://ml-platform-artifacts/<tenant>/models/model.pkl."
+            ),
+        )
+    if bucket == settings.S3_ARTIFACTS_BUCKET and not key.startswith(f"{tenant_id}/"):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail=(
+                f"{field} must live under this tenant's prefix: "
+                f"s3://{bucket}/{tenant_id}/…"
             ),
         )
     if settings.ARTIFACT_URI_MOCK_MODE:
@@ -153,7 +169,7 @@ class StageTransitionRequest(BaseModel):
 
 
 @router.post("", response_model=ModelVersion, status_code=status.HTTP_201_CREATED)
-async def register_model(
+def register_model(
     body: ModelRegisterRequest,
     request: Request,
     user: CurrentUser = Depends(require_role("DataScientist")),
@@ -174,7 +190,9 @@ async def register_model(
         )
     # Registration trust: MRM reviews against these fields, so they must
     # reference things that actually exist.
-    artifact_uri = _validate_artifact_uri(body.artifactUri) if body.artifactUri else None
+    artifact_uri = (
+        _validate_artifact_uri(body.artifactUri, tenant_id) if body.artifactUri else None
+    )
 
     version = (body.version or "").strip()
     if not version:
@@ -267,7 +285,7 @@ def compute_dev_status(mv: ModelVersion, reviews: list[GovernanceReview]) -> str
 
 
 @router.get("")
-async def list_models(
+def list_models(
     page: int = 1, pageSize: int = 20, user: CurrentUser = Depends(get_current_user)
 ) -> Dict[str, Any]:
     if user.sees_all_tenants:
@@ -303,7 +321,7 @@ async def list_models(
 
 
 @router.get("/{name}/versions")
-async def list_versions(
+def list_versions(
     name: str,
     tenantId: Optional[str] = None,
     user: CurrentUser = Depends(get_current_user),
@@ -327,7 +345,7 @@ def _get_owned_version(
 
 
 @router.get("/{name}/versions/{ver}", response_model=ModelVersion)
-async def get_version(
+def get_version(
     name: str,
     ver: str,
     tenantId: Optional[str] = None,
@@ -337,7 +355,7 @@ async def get_version(
 
 
 @router.put("/{name}/versions/{ver}", response_model=ModelVersion)
-async def update_version(
+def update_version(
     name: str,
     ver: str,
     body: ModelUpdateRequest,
@@ -379,13 +397,15 @@ async def update_version(
         )
     updates = body.model_dump(exclude_unset=True)
     if body.artifactUri is not None:
-        updates["artifactUri"] = _validate_artifact_uri(body.artifactUri)
+        updates["artifactUri"] = _validate_artifact_uri(body.artifactUri, mv.tenantId)
     # Documentation is reviewed too — same "must actually exist" bar as the
     # trained artifact. An empty/whitespace value clears the field.
     if "documentationUri" in updates:
         doc = (updates["documentationUri"] or "").strip()
         updates["documentationUri"] = (
-            _validate_artifact_uri(doc, field="documentationUri") if doc else None
+            _validate_artifact_uri(doc, mv.tenantId, field="documentationUri")
+            if doc
+            else None
         )
     for field, value in updates.items():
         setattr(mv, field, value)
@@ -403,7 +423,7 @@ async def update_version(
 
 
 @router.put("/{name}/versions/{ver}/stage", response_model=ModelVersion)
-async def transition_stage(
+def transition_stage(
     name: str,
     ver: str,
     body: StageTransitionRequest,
@@ -412,6 +432,14 @@ async def transition_stage(
     user: CurrentUser = Depends(require_role("TenantAdmin")),
 ) -> ModelVersion:
     mv = _get_owned_version(name, ver, user, tenantId)
+    # An unknown stage string (typo, wrong casing) would skip the Production
+    # gates below AND be stored as a garbage stage — reject it outright.
+    valid_stages = {s.value for s in ModelStage}
+    if body.stage not in valid_stages:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"stage must be one of: {', '.join(sorted(valid_stages))}.",
+        )
     snow_ticket = (body.snowTicketId or "").strip().upper() or None
     if body.stage == ModelStage.PRODUCTION.value:
         # THIS version must be approved — a sibling version's approval does
@@ -449,7 +477,7 @@ async def transition_stage(
 
 
 @router.get("/{name}/versions/{ver}/card")
-async def get_model_card(
+def get_model_card(
     name: str,
     ver: str,
     tenantId: Optional[str] = None,
@@ -465,7 +493,7 @@ async def get_model_card(
 
 
 @router.post("/{name}/versions/{ver}/archive", response_model=ModelVersion)
-async def archive_version(
+def archive_version(
     name: str,
     ver: str,
     request: Request,

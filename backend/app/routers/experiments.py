@@ -54,7 +54,7 @@ def _get_owned_experiment(experiment_id: str, user: CurrentUser) -> Experiment:
 
 
 @router.post("", response_model=Experiment, status_code=status.HTTP_201_CREATED)
-async def create_experiment(
+def create_experiment(
     body: ExperimentCreateRequest,
     request: Request,
     user: CurrentUser = Depends(require_role("TenantAdmin", "DataScientist")),
@@ -81,7 +81,7 @@ async def create_experiment(
 
 
 @router.get("")
-async def list_experiments(
+def list_experiments(
     page: int = 1, pageSize: int = 20, user: CurrentUser = Depends(get_current_user)
 ) -> Dict[str, Any]:
     if user.sees_all_tenants:
@@ -99,7 +99,7 @@ async def list_experiments(
 
 
 @router.get("/{experiment_id}")
-async def get_experiment(
+def get_experiment(
     experiment_id: str, user: CurrentUser = Depends(get_current_user)
 ) -> Dict[str, Any]:
     exp = _get_owned_experiment(experiment_id, user)
@@ -108,7 +108,7 @@ async def get_experiment(
 
 
 @router.post("/{experiment_id}/runs", response_model=ExperimentRun, status_code=status.HTTP_201_CREATED)
-async def create_run(
+def create_run(
     experiment_id: str,
     body: RunCreateRequest,
     request: Request,
@@ -137,7 +137,7 @@ async def create_run(
 
 
 @router.get("/{experiment_id}/runs")
-async def list_runs(
+def list_runs(
     experiment_id: str,
     sortBy: Optional[str] = None,
     order: str = "desc",
@@ -197,7 +197,7 @@ def _get_writable_run(experiment_id: str, run_id: str, user: CurrentUser) -> Exp
 
 
 @router.get("/{experiment_id}/runs/{run_id}", response_model=ExperimentRun)
-async def get_run(
+def get_run(
     experiment_id: str, run_id: str, user: CurrentUser = Depends(get_current_user)
 ) -> ExperimentRun:
     return _get_owned_run(experiment_id, run_id, user)
@@ -206,7 +206,7 @@ async def get_run(
 # The three run-update endpoints accept machine principals (run tokens) in
 # addition to human writers — this is the training job's "develop" loop.
 @router.put("/{experiment_id}/runs/{run_id}/metrics", response_model=ExperimentRun)
-async def log_metrics(
+def log_metrics(
     experiment_id: str,
     run_id: str,
     body: MetricsUpdateRequest,
@@ -218,7 +218,7 @@ async def log_metrics(
 
 
 @router.put("/{experiment_id}/runs/{run_id}/params", response_model=ExperimentRun)
-async def log_params(
+def log_params(
     experiment_id: str,
     run_id: str,
     body: ParamsUpdateRequest,
@@ -230,7 +230,7 @@ async def log_params(
 
 
 @router.put("/{experiment_id}/runs/{run_id}/tags", response_model=ExperimentRun)
-async def set_tags(
+def set_tags(
     experiment_id: str,
     run_id: str,
     body: TagsUpdateRequest,

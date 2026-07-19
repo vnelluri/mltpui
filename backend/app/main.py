@@ -3,6 +3,13 @@
 Mounts every router, wires CORS + request logging, and exposes the OpenAPI
 Swagger UI at ``/docs`` (fully usable in ``AUTH_MODE=dev`` with no auth
 headers, since ``get_current_user`` short-circuits to a synthetic user).
+
+CONVENTION: route handlers and dependencies are plain ``def``, not ``async
+def``. All I/O here is blocking (boto3, sync httpx, the Snowflake
+connector), and sync handlers run on Starlette's threadpool — an ``async``
+handler doing blocking I/O would stall the event loop and with it every
+other in-flight request on the worker. Only declare a handler ``async`` if
+everything it awaits is genuinely non-blocking.
 """
 from __future__ import annotations
 

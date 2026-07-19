@@ -42,7 +42,7 @@ class FeatureViewCreateRequest(BaseModel):
 
 
 @router.post("/views", response_model=FeatureView, status_code=status.HTTP_201_CREATED)
-async def create_feature_view(
+def create_feature_view(
     body: FeatureViewCreateRequest,
     request: Request,
     user: CurrentUser = Depends(require_role("DataScientist")),
@@ -72,7 +72,7 @@ async def create_feature_view(
 
 
 @router.get("/views")
-async def list_feature_views(
+def list_feature_views(
     page: int = 1, pageSize: int = 20, user: CurrentUser = Depends(get_current_user)
 ) -> Dict[str, Any]:
     if user.sees_all_tenants:
@@ -98,14 +98,14 @@ def _get_owned_feature_view(feature_view_id: str, user: CurrentUser) -> FeatureV
 
 
 @router.get("/views/{feature_view_id}", response_model=FeatureView)
-async def get_feature_view(
+def get_feature_view(
     feature_view_id: str, user: CurrentUser = Depends(get_current_user)
 ) -> FeatureView:
     return _get_owned_feature_view(feature_view_id, user)
 
 
 @router.get("/views/{feature_view_id}/preview")
-async def preview_feature_view(
+def preview_feature_view(
     feature_view_id: str, user: CurrentUser = Depends(get_current_user)
 ) -> Dict[str, Any]:
     fv = _get_owned_feature_view(feature_view_id, user)
@@ -116,7 +116,7 @@ async def preview_feature_view(
 
 
 @router.post("/views/{feature_view_id}/materialize", response_model=FeatureView)
-async def materialize_feature_view(
+def materialize_feature_view(
     feature_view_id: str,
     request: Request,
     user: CurrentUser = Depends(require_role("TenantAdmin", "DataScientist")),

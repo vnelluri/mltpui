@@ -30,7 +30,7 @@ class NotebookLaunchRequest(BaseModel):
 
 
 @router.post("/launch", response_model=NotebookSession, status_code=status.HTTP_201_CREATED)
-async def launch_notebook(
+def launch_notebook(
     body: NotebookLaunchRequest,
     request: Request,
     user: CurrentUser = Depends(require_role("TenantAdmin", "DataScientist")),
@@ -69,6 +69,6 @@ async def launch_notebook(
 
 
 @router.get("/sessions")
-async def list_sessions(user: CurrentUser = Depends(get_current_user)) -> Dict[str, Any]:
+def list_sessions(user: CurrentUser = Depends(get_current_user)) -> Dict[str, Any]:
     items = _repo.list_by_user(user.userId)
     return {"items": items, "total": len(items), "page": 1, "pageSize": len(items) or 1}

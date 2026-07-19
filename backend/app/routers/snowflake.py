@@ -93,7 +93,7 @@ class SnowflakeQueryRequest(BaseModel):
 
 
 @router.get("/status", response_model=SnowflakeStatusResponse)
-async def snowflake_status(
+def snowflake_status(
     user: CurrentUser = Depends(get_current_user),
 ) -> SnowflakeStatusResponse:
     cache = _token_repo.get(user.userId)
@@ -108,7 +108,7 @@ async def snowflake_status(
 
 
 @router.post("/connect", response_model=SnowflakeStatusResponse)
-async def snowflake_connect(
+def snowflake_connect(
     request: Request, user: CurrentUser = Depends(get_current_user)
 ) -> SnowflakeStatusResponse:
     cache = connect_snowflake(user)
@@ -127,7 +127,7 @@ async def snowflake_connect(
 
 
 @router.post("/disconnect")
-async def snowflake_disconnect(
+def snowflake_disconnect(
     request: Request, user: CurrentUser = Depends(get_current_user)
 ) -> dict:
     _token_repo.delete(user.userId)
@@ -142,7 +142,7 @@ async def snowflake_disconnect(
 
 
 @router.post("/query")
-async def snowflake_query(
+def snowflake_query(
     body: SnowflakeQueryRequest, user: CurrentUser = Depends(get_current_user)
 ) -> Dict[str, Any]:
     try:
@@ -165,13 +165,13 @@ async def snowflake_query(
 
 
 @router.get("/databases")
-async def list_databases(user: CurrentUser = Depends(get_current_user)) -> List[str]:
+def list_databases(user: CurrentUser = Depends(get_current_user)) -> List[str]:
     token = _get_valid_token(user)
     return snowflake_service.list_databases(token)
 
 
 @router.get("/databases/{db}/schemas")
-async def list_schemas(db: str, user: CurrentUser = Depends(get_current_user)) -> List[str]:
+def list_schemas(db: str, user: CurrentUser = Depends(get_current_user)) -> List[str]:
     token = _get_valid_token(user)
     try:
         return snowflake_service.list_schemas(token, db)
@@ -180,7 +180,7 @@ async def list_schemas(db: str, user: CurrentUser = Depends(get_current_user)) -
 
 
 @router.get("/databases/{db}/schemas/{schema}/tables")
-async def list_tables(
+def list_tables(
     db: str, schema: str, user: CurrentUser = Depends(get_current_user)
 ) -> List[Dict[str, Any]]:
     token = _get_valid_token(user)
@@ -191,7 +191,7 @@ async def list_tables(
 
 
 @router.get("/databases/{db}/schemas/{schema}/tables/{table}/preview")
-async def preview_table(
+def preview_table(
     db: str, schema: str, table: str, user: CurrentUser = Depends(get_current_user)
 ) -> Dict[str, Any]:
     token = _get_valid_token(user)

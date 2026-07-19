@@ -47,7 +47,7 @@ def _root_prefix_for(user: CurrentUser) -> str:
 
 
 @router.get("/browse")
-async def browse(
+def browse(
     prefix: str = "",
     user: CurrentUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
@@ -93,7 +93,7 @@ async def browse(
 
 
 @router.post("/upload")
-async def upload(
+def upload(
     request: Request,
     file: UploadFile = File(...),
     prefix: Optional[str] = Form(None),
@@ -131,7 +131,9 @@ async def upload(
             status_code=status.HTTP_400_BAD_REQUEST, detail="Missing file name."
         )
 
-    body = await file.read()
+    # Sync read (this handler runs on the threadpool, like every route in
+    # this codebase): UploadFile.file is the underlying SpooledTemporaryFile.
+    body = file.file.read()
     if len(body) > _MAX_UPLOAD_BYTES:
         raise HTTPException(
             status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,

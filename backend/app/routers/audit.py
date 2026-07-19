@@ -15,7 +15,7 @@ _repo = AuditRepository()
 
 
 @router.get("/events")
-async def list_audit_events(
+def list_audit_events(
     page: int = 1,
     pageSize: int = 20,
     userId: Optional[str] = None,

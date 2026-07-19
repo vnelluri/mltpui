@@ -111,10 +111,13 @@ def _build_user(
     return user
 
 
-async def get_current_user(
+def get_current_user(
     request: Request,
     credentials: Optional[HTTPAuthorizationCredentials] = Depends(_bearer),
 ) -> CurrentUser:
+    # Deliberately sync (as are all route handlers): every I/O call in this
+    # codebase is blocking (boto3, httpx sync), so sync defs let FastAPI run
+    # them on the threadpool instead of stalling the event loop.
     # ── Machine principal: run tokens (mlrt_…) presented by training jobs ──
     # Checked before the dev bypass so the narrow machine scoping is
     # exercised identically in local dev and prod.
@@ -219,8 +222,9 @@ def require_role(*allowed_roles: str):
 def require_any_role(roles: Iterable[str]):
     """Like :func:`require_role` but does NOT implicitly allow PlatformAdmin.
 
-    Used for the rare case (MRM-only endpoints) where even PlatformAdmin
-    should not bypass the check — currently unused, kept for completeness.
+    Used where even PlatformAdmin must not bypass the check — e.g. the MRM
+    governance decision (segregation of duties: the platform operator cannot
+    approve models).
     """
 
     allowed = set(roles)

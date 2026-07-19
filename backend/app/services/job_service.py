@@ -8,9 +8,11 @@ mode a fake secret ARN is returned without writing anything.
 from __future__ import annotations
 
 import json
+import threading
+import time
 import uuid
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Dict, Optional
 
 from app.config import settings
 from app.db.client import make_boto3_client
@@ -29,6 +31,14 @@ _TERMINAL_STATUSES = {
     JobStatus.CANCELLED.value,
 }
 
+# Minimum seconds between real AWS status polls for the SAME job. The Jobs
+# page polls every few seconds per user, and every user in a tenant polls the
+# same job list — without this, N users means N redundant EMR/SageMaker
+# describe calls per job per poll cycle. Within the window a job just keeps
+# its last persisted status. Per-process (each ECS task has its own map),
+# which still collapses the per-user multiplier — the one that grows.
+_STATUS_POLL_THROTTLE_SECONDS = 15
+
 
 def _parse_iso(ts: str) -> datetime:
     cleaned = (ts or "").replace("Z", "+00:00")
@@ -46,6 +56,28 @@ class JobService:
         self.emr_mock = settings.EMR_MOCK_MODE
         self.sagemaker_mock = settings.SAGEMAKER_MOCK_MODE
         self.snowflake_mock = settings.SNOWFLAKE_MOCK_MODE
+        # jobId -> epoch of the last real AWS status poll (throttling).
+        self._last_polled: Dict[str, float] = {}
+        self._poll_lock = threading.Lock()
+
+    def _claim_status_poll(self, job_id: str) -> bool:
+        """Return True if this caller should really poll AWS for ``job_id``,
+        False if another request refreshed it within the throttle window.
+        Claiming is atomic under the lock, so concurrent threadpool requests
+        can't both slip through."""
+        now = time.time()
+        with self._poll_lock:
+            if now - self._last_polled.get(job_id, 0.0) < _STATUS_POLL_THROTTLE_SECONDS:
+                return False
+            self._last_polled[job_id] = now
+            # Bounded map: entries older than the window are dead weight
+            # (job finished or nobody is watching it) — prune occasionally.
+            if len(self._last_polled) > 1000:
+                cutoff = now - _STATUS_POLL_THROTTLE_SECONDS
+                self._last_polled = {
+                    k: v for k, v in self._last_polled.items() if v > cutoff
+                }
+            return True
 
     # ── Secrets Manager token transit ────────────────────────────────────
     def store_job_secret(
@@ -144,8 +176,16 @@ class JobService:
         if job.executorMemory:
             spark_params.append(f"--conf spark.executor.memory={job.executorMemory}")
         # Env vars carried via Spark config so the entrypoint can read them
-        # from its process environment on both driver and executors.
+        # from its process environment on both driver and executors. The
+        # parameter string is space-joined, so a value containing whitespace
+        # would mangle the whole submit line (free-text fields like custom
+        # SQL travel in the per-job secret instead — see _job_env).
         for key, value in self._job_env(job, secret_arn).items():
+            if any(ch.isspace() for ch in str(value)):
+                raise RuntimeError(
+                    f"Job environment value {key!r} contains whitespace and "
+                    "cannot be carried in spark-submit parameters."
+                )
             spark_params.append(f"--conf spark.emr-serverless.driverEnv.{key}={value}")
             spark_params.append(f"--conf spark.executorEnv.{key}={value}")
         resp = client.start_job_run(
@@ -236,8 +276,9 @@ class JobService:
             env["SNOWFLAKE_WAREHOUSE"] = job.snowflakeWarehouse
         if job.snowflakeTable:
             env["SNOWFLAKE_TABLE"] = job.snowflakeTable
-        if job.snowflakeSql:
-            env["SNOWFLAKE_CUSTOM_SQL"] = job.snowflakeSql
+        # snowflakeSql deliberately NOT here: free-text SQL cannot ride in the
+        # space-joined EMR spark-submit parameters. It travels in the per-job
+        # secret (key "snowflakeSql") alongside the tokens.
         if secret_arn:
             # Only the secret ARN is passed — never the plaintext token.
             env["SNOWFLAKE_TOKEN_SECRET_ARN"] = secret_arn
@@ -301,6 +342,10 @@ class JobService:
         return make_boto3_client("emr-serverless"), settings.EMR_SERVERLESS_APPLICATION_ID
 
     def _poll_real_status(self, job: TrainingJob) -> TrainingJob:
+        # Throttled: within the window the job keeps its last persisted
+        # status instead of triggering another EMR/SageMaker describe call.
+        if not self._claim_status_poll(job.jobId):
+            return job
         previous_status = job.status
         try:
             if job.computeType == "emr_serverless" and job.emrJobRunId:
