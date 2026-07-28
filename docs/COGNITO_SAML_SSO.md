@@ -145,7 +145,9 @@ talks to the Hosted UI domain and Azure AD on the user's own network.
 - **Group changes still apply at next sign-in** (a new SAML assertion →
   fresh `custom:groups`), same as the old flow.
 - **EMR Studio SSO is unrelated** to this flow — it authenticates via IAM
-  Identity Center (see `EMR_STUDIO_LAUNCH.md`), not Cognito.
+  Identity Center (see `EMR_STUDIO_LAUNCH.md`), not Cognito. The two
+  independent trusts (this one, and Entra ↔ Identity Center) are drawn
+  side by side in [diagrams/auth-trusts.puml](diagrams/auth-trusts.puml).
 
 ## Verification checklist
 

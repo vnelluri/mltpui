@@ -1,0 +1,49 @@
+@startuml auth-trusts
+title Two independent auth trusts — same Entra tenant & groups, separate brokers
+skinparam componentStyle rectangle
+skinparam shadowing false
+skinparam defaultTextAlignment center
+
+actor "User\n(member of myapp-* groups)" as user
+
+cloud "Azure / Entra ID (one tenant)" {
+  [myapp-* security groups\n(shared vocabulary)] as groups
+  [Enterprise app A\nSAML → Cognito] as appA
+  [Enterprise app B\nSAML + SCIM →\nIdentity Center] as appB
+  groups .. appA
+  groups .. appB
+}
+
+package "Trust A — application login" {
+  cloud "AWS control-plane account" {
+    [Cognito user pool\nHosted UI + SAML IdP] as cognito
+    [Backend (FastAPI)\nvalidates Cognito ID token] as be
+  }
+}
+
+package "Trust B — EMR Studio notebooks" {
+  cloud "AWS Organization" {
+    [IAM Identity Center\n(mgmt / delegated-admin acct)] as idc
+    [EMR Studio\nauth_mode = SSO\n(member account)] as studio
+  }
+}
+
+' ── Trust A: app login ────────────────────────────────────────────────
+user --> cognito : signs in via Hosted UI
+appA <..> cognito : SAML assertion —\ngroups as NAMES → custom:groups
+cognito --> be : ID token (Bearer)
+be -> be : names → CurrentUser(role, tenantId)
+
+' ── Trust B: notebooks ───────────────────────────────────────────────
+user --> studio : opens EMR_STUDIO_URL\n(browser, outside the app)
+appB <..> idc : SAML login + SCIM group sync
+idc --> studio : which myapp-* groups →\nsession mapping (basic / intermediate)
+
+note bottom
+  Same user, same myapp-* group names, TWO independent SAML trusts:
+  Entra app A ↔ Cognito (drives in-app role/tenant), and
+  Entra app B ↔ Identity Center (drives notebook access tier).
+  The app never talks to Identity Center — its only link to Trust B
+  is the static EMR_STUDIO_URL string it reads from SSM.
+end note
+@enduml
