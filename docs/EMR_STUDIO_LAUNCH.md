@@ -10,6 +10,18 @@ EMR Studio and never calls the EMR Studio API. There is no presigning for
 EMR Studio — the URL is static and identical for every user and tenant;
 per-user identity comes from the SSO sign-in behind it, not from the link.
 
+> **In plain terms — the control plane does not access EMR for notebooks.**
+> The Studio itself lives in the **dataplane** account, next to the EMR
+> Serverless apps. For a notebook launch the **control plane only hands out a
+> link** (a URL string it read from SSM) — it never touches EMR. The user's
+> browser opens that link straight into the dataplane, signs in via Identity
+> Center, and attaches to EMR there; every step after the link is
+> same-account, inside the dataplane. The control plane *does* reach into the
+> dataplane's EMR in exactly one case — **training-job submission** (the
+> backend assumes a dataplane role via STS and calls `StartJobRun`) — but
+> that is a separate path with no Studio involved. Notebook = link only;
+> job = real cross-account call. See §3 for the full breakdown.
+
 ## 1. Runtime flow (a user clicks "Launch EMR Studio")
 
 ```
