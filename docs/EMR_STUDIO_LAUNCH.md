@@ -141,7 +141,75 @@ aws_emr_studio.this.url                  aws_ssm_parameter            ECS task d
 Local dev never needs the real URL: `backend/.env.example` leaves
 `EMR_STUDIO_URL=` empty and `EMR_MOCK_MODE` supplies mock session URLs.
 
-## 3. Which account does what (two-account split)
+## 3. Compute access: attach vs. submit
+
+"EMR Studio → EMR Serverless" and "control plane → dataplane" are **two
+different access paths**. The design keeps them apart on purpose, and
+conflating them is the usual source of confusion.
+
+The placement fact that makes this work: in the two-account split the
+**Studio is deployed into the dataplane account** (§4), applied by the
+backend pipeline through a dataplane provider alias, *next to* the per-tenant
+EMR Serverless applications. That is what makes the notebook attach
+same-account and keeps the control plane out of the runtime path.
+
+### Path 1 — notebook attach (Studio ↔ EMR Serverless)
+
+Happens **entirely inside the dataplane account, in the user's browser
+session**; the backend is not involved at request time.
+
+- **Identity** — the federated session (Identity Center) assumes the shared
+  **user role** (`ml-platform-emr-studio-user-role`), narrowed by the mapped
+  session policy. Role and apps both live in the dataplane account → a
+  **same-account** assumption, no cross-account STS.
+- **Attach** — the user picks an EMR Serverless application as the Workspace
+  engine; the browse is `emr-serverless:ListApplications`/`GetApplication`
+  from the session policy. Apps offered are the per-tenant ones from
+  `tmt-dataplane`.
+- **Network** — the two-SG model: Workspace SG → **Engine SG on port 18888
+  only** (Jupyter Enterprise Gateway). That 18888 hop is the actual runtime
+  wire between notebook and compute.
+- **Control-plane touch** — only storage: notebook `.ipynb` files write to
+  `default_s3_location`, a prefix in the **control-plane** artifacts bucket.
+  No control-plane compute path.
+
+### Path 2 — job submission (backend → EMR Serverless)
+
+The *other* way EMR Serverless is used — training jobs, driven by the
+backend, **no Studio involved** — and the one that genuinely crosses
+accounts. The control-plane backend task role does **`sts:AssumeRole` +
+`TagSession`** on the dataplane **runtime role** with a `tenantId` session tag
+(**ABAC**), then calls `emr-serverless:StartJobRun`, constrained by the
+`platform=<name_prefix>` resource tag and `iam:PassRole` limited to the
+tenant execution-role pattern (ARCHITECTURE.md §4.2).
+
+### Why the difference matters
+
+|  | Path 1: notebook attach | Path 2: job submit |
+|---|---|---|
+| Driven by | user's browser (Studio) | backend (FastAPI) |
+| Identity | Identity Center user → shared user role | control-plane task role → assumed dataplane runtime role |
+| Cross-account? | **No** — Studio co-located with apps | **Yes** — STS AssumeRole + `tenantId` ABAC tag |
+| Tenant isolation | **None** — `Resource: *` on emr-serverless; any tier user can attach to any tenant's app | **Per-tenant** — ABAC tag + execution role + KMS |
+
+This asymmetry is the documented known limitation (ARCHITECTURE.md §3.6):
+job *submission* is tenant-isolated by ABAC, but notebook *attach* is not —
+a `basic` user in one tenant can attach a Workspace to another tenant's app.
+Per-tenant Studios are the deferred fix.
+
+### Two dependencies this repo does not enforce
+
+- **Interactive endpoint on the EMR Serverless apps.** A Workspace can only
+  attach to an application with its interactive endpoint enabled
+  (`interactiveConfiguration` / Livy). This module does not create the apps —
+  `tmt-dataplane` does — so that flag must be set there, or attach silently
+  offers nothing.
+- **Same VPC/subnet reachability.** The Studio Engine SG and each EMR
+  Serverless application's network config must sit in subnets that can reach
+  each other on 18888. Both are in the dataplane account now, so line up the
+  `subnet_ids` passed to this module with the apps' network config.
+
+## 4. Which account does what (two-account split)
 
 A common point of confusion: **the Studio URL is never configured in
 Identity Center** — AWS generates the access URL when the `aws_emr_studio`
@@ -159,7 +227,7 @@ In a **single-account deployment** the first three collapse into one account
 (Identity Center still requires an AWS Organizations org, even a
 one-account org).
 
-## 4. Prerequisites checklist
+## 5. Prerequisites checklist
 
 Everything the flow above assumes is already in place:
 
