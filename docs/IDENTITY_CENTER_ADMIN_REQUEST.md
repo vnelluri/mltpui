@@ -117,6 +117,53 @@ denies only the Studio-creation writes, our pipeline can still own session
 mappings; if it denies assignments too, you'd own those as well. Please tell us
 which your boundary blocks.
 
+### If we go with Option B: how to create the Studio
+
+**Sequencing — you are waiting on us first.** We apply our Terraform with
+`create_studio = false`, which creates the IAM roles, security groups, and
+session policies but *not* the Studio. That apply produces the ARNs/IDs below;
+we then send you this table filled in. **Do not create the Studio until you
+have our values packet** — the roles and SGs must exist first.
+
+Create one EMR Studio with these inputs (a single `CreateStudio` call):
+
+| Input | Value | Source |
+|---|---|---|
+| Auth mode | **`SSO`** | you set this |
+| Name | `ml-platform-studio` | our convention |
+| Service role | *(ARN)* | our output `service_role_arn` |
+| User role | *(ARN)* — **required in SSO mode** | our output `user_role_arn` |
+| Engine security group | *(sg-…)* | our output `engine_security_group_id` |
+| Workspace security group | *(sg-…)* | our output `workspace_security_group_id` |
+| VPC | *(vpc-…)* | we provide |
+| Subnets | *(subnet-…)* | we provide |
+| Default S3 location | `s3://…/emr-studio-workspaces` | we provide |
+
+> **Region:** create the Studio in the **same region as instance
+> `ssoins-72234c3bde346d6c`** (per step 1). Creating it in another region is
+> exactly the "resource does not exist in this Region" failure we already hit.
+
+CLI equivalent (values from the packet we send):
+
+```bash
+aws emr create-studio \
+  --name ml-platform-studio \
+  --auth-mode SSO \
+  --region <instance-region> \
+  --vpc-id <vpc-id> \
+  --subnet-ids <subnet-a> <subnet-b> \
+  --service-role <service_role_arn> \
+  --user-role <user_role_arn> \
+  --engine-security-group-id <engine_sg_id> \
+  --workspace-security-group-id <workspace_sg_id> \
+  --default-s3-location s3://<bucket>/emr-studio-workspaces
+```
+
+**Return to us:** the `StudioId` and `Url` from the response. We plug those into
+our pipeline (`studio_id` / `studio_url`), which wires the URL into the app and
+creates the session mappings (if your boundary allows — see above). You do **not**
+create session mappings or anything else under Option B; just the Studio.
+
 ## What you do NOT need to do
 
 - Create the IAM roles, security groups, session policies, or S3 buckets — all
