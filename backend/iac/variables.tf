@@ -97,6 +97,12 @@ variable "dataplane_runtime_role_arn" {
   default     = null
 }
 
+variable "emr_studio_tier_role_arns" {
+  description = "EMR Studio IAM auth mode: ARNs of the basic/intermediate tier roles (from the iac-emr-studio module's tier_role_arns output) the backend may assume to presign Studio URLs. Empty for SSO mode."
+  type        = list(string)
+  default     = []
+}
+
 variable "provisioning_event_bus_arn" {
   description = "EventBridge bus ARN for TenantProvisioningRequested events. Null uses the account's default bus. The bus NAME the app publishes to is derived from this same ARN, so IAM grant and publish target can never disagree."
   type        = string

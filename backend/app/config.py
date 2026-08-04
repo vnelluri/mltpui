@@ -103,6 +103,16 @@ class Settings(BaseSettings):
     # tenant-prefixed; per-tenant Studios are a later release.
     EMR_STUDIO_URL: Optional[str] = None
     EMR_MOCK_MODE: bool = True
+    # EMR Studio authentication mode. "SSO" (default): the backend deep-links to
+    # the static EMR_STUDIO_URL and Identity Center supplies each user's Entra
+    # identity. "IAM": no Identity Center — the backend assumes a per-tier role
+    # (RoleSessionName = the user's stable id, so EMR Studio's per-user
+    # creatorUserId Workspace ownership holds) and calls CreateStudioPresignedUrl
+    # to deep-link the user in. See docs/EMR_STUDIO_IAM_MODE.md.
+    EMR_AUTH_MODE: str = "SSO"
+    EMR_STUDIO_ID: Optional[str] = None  # IAM mode: the Studio to presign into
+    EMR_STUDIO_BASIC_ROLE_ARN: Optional[str] = None
+    EMR_STUDIO_INTERMEDIATE_ROLE_ARN: Optional[str] = None
 
     # ── SageMaker ───────────────────────────────────────────────────────────
     # Execution roles are per-tenant (Tenant.executionRoleArn) — there is

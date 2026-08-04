@@ -47,6 +47,36 @@ variable "session_identity_type" {
   default     = "GROUP"
 }
 
+variable "auth_mode" {
+  description = <<-EOT
+    EMR Studio authentication mode: "SSO" (IAM Identity Center — the default,
+    uses user_role + session_mappings) or "IAM" (no Identity Center — the
+    backend presigns a URL after assuming a per-tier role; see the module
+    README "IAM authentication mode"). IAM mode avoids the sso: writes that a
+    locked-down CI/CD role can't perform, at the cost of the backend calling
+    the EMR Studio API at launch time.
+  EOT
+  type        = string
+  default     = "SSO"
+
+  validation {
+    condition     = contains(["SSO", "IAM"], var.auth_mode)
+    error_message = "auth_mode must be \"SSO\" or \"IAM\"."
+  }
+}
+
+variable "backend_principal_arns" {
+  description = "IAM mode only: principals (e.g. the backend task role ARN) allowed to assume the basic/intermediate tier roles to presign Studio URLs. Required when auth_mode = \"IAM\"."
+  type        = list(string)
+  default     = []
+}
+
+variable "emr_serverless_runtime_role_arn_pattern" {
+  description = "IAM mode only: ARN (pattern) of the EMR Serverless job runtime role(s) the intermediate tier may iam:PassRole when starting jobs. Defaults to * — scope to the tenant execution-role pattern in production."
+  type        = string
+  default     = "*"
+}
+
 variable "create_studio" {
   description = <<-EOT
     Whether this module creates the aws_emr_studio resource. Creating a Studio

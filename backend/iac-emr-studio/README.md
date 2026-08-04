@@ -80,6 +80,41 @@ Ordering: apply this module (roles/SGs/policies) → hand the outputs to the
 admin → admin creates the Studio → re-apply with `studio_id`/`studio_url` set
 (and `session_mappings` if permitted).
 
+## IAM authentication mode (`auth_mode = "IAM"`)
+
+An alternative to Identity Center entirely. In SSO mode `CreateStudio` registers
+the Studio in IAM Identity Center (the `sso:` writes a locked-down CI/CD role
+can't do); IAM mode has **no Identity Center**, so none of that applies — no
+federation, no SCIM, no session mappings, no `sso:` permissions.
+
+Set `auth_mode = "IAM"` and the module instead creates **two assumable tier
+roles** (`…-emr-studio-basic`, `…-emr-studio-intermediate`) trusted by
+`backend_principal_arns`. The backend assumes the tier role for a user's role
+(`RoleSessionName` = the user's stable id) and calls
+`elasticmapreduce:CreateStudioPresignedUrl` to deep-link them in — mirroring the
+SageMaker presign path. Per-user Workspace ownership still holds: EMR Studio tags
+each Workspace with `creatorUserId = ${aws:userId}`, which embeds the
+`RoleSessionName`, so the tier roles' collaboration permissions are creator-scoped.
+
+```hcl
+module "emr_studio" {
+  source                 = "git::https://<host>/tmt.git//backend/iac-emr-studio?ref=main"
+  name_prefix            = "ml-platform"
+  vpc_id                 = var.vpc_id
+  subnet_ids             = var.private_subnet_ids
+  default_s3_location    = "s3://ml-platform-artifacts-prod/emr-studio-workspaces"
+  auth_mode              = "IAM"
+  backend_principal_arns = [var.backend_task_role_arn]   # who may presign
+  # session_mappings is ignored in IAM mode
+}
+```
+
+Wire back: feed `tier_role_arns` to the backend's `EMR_STUDIO_BASIC_ROLE_ARN` /
+`EMR_STUDIO_INTERMEDIATE_ROLE_ARN` and `emr_studio_tier_role_arns` (so the task
+role gets `sts:AssumeRole`), set `EMR_AUTH_MODE=IAM` and `EMR_STUDIO_ID`. Full
+design + trade-offs (attribution, MRM) in
+[docs/EMR_STUDIO_IAM_MODE.md](../../docs/EMR_STUDIO_IAM_MODE.md).
+
 ## Known limitation (matches the platform README)
 
 The Studio is **platform-global** while jobs/data are **per-tenant** — the
@@ -127,3 +162,8 @@ a user's group is mapped to.
   Studio split above; then `studio_id` and `studio_url` are **required**.
 - `studio_id` / `studio_url` — identifiers of an externally created Studio,
   used only when `create_studio = false`.
+- `auth_mode` — `"SSO"` (default) or `"IAM"`; see "IAM authentication mode".
+- `backend_principal_arns` — IAM mode only; principals allowed to assume the
+  tier roles. **Required** when `auth_mode = "IAM"`.
+- `emr_serverless_runtime_role_arn_pattern` — IAM mode only; role(s) the
+  intermediate tier may `iam:PassRole` to start jobs (default `*`).

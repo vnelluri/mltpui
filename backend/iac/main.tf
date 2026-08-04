@@ -237,6 +237,17 @@ data "aws_iam_policy_document" "task" {
       resources = [var.dataplane_runtime_role_arn]
     }
   }
+
+  # EMR Studio IAM auth mode: assume the per-tier roles (with user/tenant
+  # session tags) to presign Studio URLs. Empty in SSO mode.
+  dynamic "statement" {
+    for_each = length(var.emr_studio_tier_role_arns) == 0 ? [] : [1]
+    content {
+      sid       = "AssumeEmrStudioTierRoles"
+      actions   = ["sts:AssumeRole", "sts:TagSession"]
+      resources = var.emr_studio_tier_role_arns
+    }
+  }
 }
 
 resource "aws_iam_role_policy" "task" {

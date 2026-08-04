@@ -17,6 +17,13 @@ locals {
   s3_bucket_arn       = "arn:aws:s3:::${local.s3_bucket_name}"
   s3_prefix           = join("/", slice(split("/", local.s3_location_trimmed), 1, length(split("/", local.s3_location_trimmed))))
   s3_objects_arn      = local.s3_prefix == "" ? "${local.s3_bucket_arn}/*" : "${local.s3_bucket_arn}/${local.s3_prefix}/*"
+
+  # Authentication mode gates two disjoint resource sets: SSO uses a shared
+  # user_role + session policies + session mappings (Identity Center); IAM
+  # uses per-tier assumable roles the backend presigns with (no Identity
+  # Center). See the module README.
+  is_sso = var.auth_mode == "SSO"
+  is_iam = var.auth_mode == "IAM"
 }
 
 # ── Security groups ───────────────────────────────────────────────────────────
@@ -137,11 +144,12 @@ resource "aws_iam_role_policy" "service" {
 }
 
 # ── User role (assumed by every federated SSO user via Identity Center) ─────
-# Platform-global by design (see repo README's MVP limitation): all users
-# share this one role, so it is scoped to browsing/attaching EMR Serverless
-# applications and the shared Workspace bucket — NOT to any tenant's data.
-# Per-tenant isolation for notebook activity is a later release.
+# SSO mode only. Platform-global by design (see repo README's MVP limitation):
+# all users share this one role, so it is scoped to browsing/attaching EMR
+# Serverless applications and the shared Workspace bucket — NOT to any tenant's
+# data. Per-tenant isolation for notebook activity is a later release.
 resource "aws_iam_role" "user" {
+  count              = local.is_sso ? 1 : 0
   name               = "${var.name_prefix}-emr-studio-user-role"
   assume_role_policy = data.aws_iam_policy_document.studio_assume.json
   tags               = var.tags
@@ -185,8 +193,9 @@ data "aws_iam_policy_document" "user" {
 }
 
 resource "aws_iam_role_policy" "user" {
+  count  = local.is_sso ? 1 : 0
   name   = "emr-studio-user"
-  role   = aws_iam_role.user.id
+  role   = aws_iam_role.user[0].id
   policy = data.aws_iam_policy_document.user.json
 }
 
@@ -232,12 +241,14 @@ data "aws_iam_policy_document" "session_intermediate" {
 }
 
 resource "aws_iam_policy" "session_basic" {
+  count  = local.is_sso ? 1 : 0
   name   = "${var.name_prefix}-emr-studio-session-basic"
   policy = data.aws_iam_policy_document.session_basic.json
   tags   = var.tags
 }
 
 resource "aws_iam_policy" "session_intermediate" {
+  count  = local.is_sso ? 1 : 0
   name   = "${var.name_prefix}-emr-studio-session-intermediate"
   policy = data.aws_iam_policy_document.session_intermediate.json
   tags   = var.tags
@@ -245,8 +256,8 @@ resource "aws_iam_policy" "session_intermediate" {
 
 locals {
   session_policy_arns = {
-    basic        = aws_iam_policy.session_basic.arn
-    intermediate = aws_iam_policy.session_intermediate.arn
+    basic        = one(aws_iam_policy.session_basic[*].arn)
+    intermediate = one(aws_iam_policy.session_intermediate[*].arn)
   }
 
   # The Studio this module operates on: the one it creates, or (when
@@ -256,14 +267,19 @@ locals {
   studio_url_effective = var.create_studio ? one(aws_emr_studio.this[*].url) : var.studio_url
 }
 
-# When create_studio = false the Studio is created out-of-band; both
-# identifiers must then be supplied (Terraform < 1.9 can't cross-reference
-# variables in a validation block, so enforce it here).
+# Cross-variable invariants (Terraform < 1.9 can't reference other variables in
+# a variable validation block, so enforce them here):
+#  - create_studio = false ⇒ studio_id/studio_url supplied (admin-owned Studio).
+#  - auth_mode = "IAM" ⇒ backend_principal_arns supplied (who may presign).
 resource "terraform_data" "require_external_studio" {
   lifecycle {
     precondition {
       condition     = var.create_studio || (var.studio_id != "" && var.studio_url != "")
       error_message = "create_studio = false requires both studio_id and studio_url (the admin-created Studio's identifiers)."
+    }
+    precondition {
+      condition     = var.auth_mode != "IAM" || length(var.backend_principal_arns) > 0
+      error_message = "auth_mode = \"IAM\" requires backend_principal_arns (the principals allowed to assume the tier roles and presign)."
     }
   }
 }
@@ -277,15 +293,17 @@ resource "aws_emr_studio" "this" {
   count = var.create_studio ? 1 : 0
 
   name                        = "${var.name_prefix}-studio"
-  auth_mode                   = "SSO"
+  auth_mode                   = var.auth_mode
   default_s3_location         = var.default_s3_location
   engine_security_group_id    = aws_security_group.engine.id
   workspace_security_group_id = aws_security_group.workspace.id
   service_role                = aws_iam_role.service.arn
-  user_role                   = aws_iam_role.user.arn
-  vpc_id                      = var.vpc_id
-  subnet_ids                  = var.subnet_ids
-  tags                        = var.tags
+  # user_role is an SSO-mode concept (the shared role every federated session
+  # assumes); IAM mode has no user_role — access is via presigned URLs.
+  user_role  = local.is_sso ? one(aws_iam_role.user[*].arn) : null
+  vpc_id     = var.vpc_id
+  subnet_ids = var.subnet_ids
+  tags       = var.tags
 }
 
 # ── Session mappings ──────────────────────────────────────────────────────────
@@ -297,10 +315,133 @@ resource "aws_emr_studio" "this" {
 # Assignment / identitystore reads), leave session_mappings empty and have the
 # admin own them too.
 resource "aws_emr_studio_session_mapping" "this" {
-  for_each = var.session_mappings
+  # SSO only — IAM mode has no session mappings (access is via presigned URLs).
+  for_each = local.is_sso ? var.session_mappings : {}
 
   studio_id          = local.studio_id_effective
   identity_type      = var.session_identity_type
   identity_name      = each.key
   session_policy_arn = local.session_policy_arns[each.value]
+}
+
+# ── IAM auth mode: per-tier assumable roles ─────────────────────────────────
+# In IAM mode there is no Identity Center. The backend assumes one of these
+# roles (with RoleSessionName = the user's STABLE id, so EMR Studio's
+# creatorUserId=${aws:userId} Workspace ownership is per-user and stable across
+# logins) and calls emr:CreateStudioPresignedUrl to deep-link the user in.
+# "basic" = browse + attach + run notebooks; "intermediate" adds EMR Serverless
+# application lifecycle — mirroring the SSO session-policy tiers.
+data "aws_iam_policy_document" "backend_assume" {
+  count = local.is_iam ? 1 : 0
+  statement {
+    actions = ["sts:AssumeRole", "sts:TagSession"]
+    principals {
+      type        = "AWS"
+      identifiers = var.backend_principal_arns
+    }
+  }
+}
+
+data "aws_iam_policy_document" "iam_tier_basic" {
+  count = local.is_iam ? 1 : 0
+
+  statement {
+    sid       = "StudioAccessAndPresign"
+    actions   = ["elasticmapreduce:CreateStudioPresignedUrl", "elasticmapreduce:DescribeStudio", "elasticmapreduce:ListStudios"]
+    resources = ["*"]
+  }
+  statement {
+    sid = "WorkspaceLifecycle"
+    actions = [
+      "elasticmapreduce:CreateEditor", "elasticmapreduce:DescribeEditor",
+      "elasticmapreduce:ListEditors", "elasticmapreduce:StartEditor",
+      "elasticmapreduce:StopEditor", "elasticmapreduce:DeleteEditor",
+      "elasticmapreduce:OpenEditorInConsole", "elasticmapreduce:AttachEditor",
+      "elasticmapreduce:DetachEditor",
+    ]
+    resources = ["*"]
+  }
+  # Per-user Workspace ownership: EMR Studio tags each Workspace with
+  # creatorUserId = the creator's aws:userId (which, for an assumed-role
+  # session, embeds RoleSessionName). Scoping the collaboration-management
+  # actions to that tag means a user may only manage the Workspaces they own.
+  statement {
+    sid = "WorkspaceCollaborationOwnerScoped"
+    actions = [
+      "elasticmapreduce:UpdateEditor", "elasticmapreduce:PutWorkspaceAccess",
+      "elasticmapreduce:DeleteWorkspaceAccess", "elasticmapreduce:ListWorkspaceAccessIdentities",
+    ]
+    resources = ["*"]
+    condition {
+      test     = "StringEquals"
+      variable = "elasticmapreduce:ResourceTag/creatorUserId"
+      values   = ["$${aws:userId}"]
+    }
+  }
+  statement {
+    sid = "EmrServerlessBrowseAttach"
+    actions = [
+      "emr-serverless:ListApplications", "emr-serverless:GetApplication",
+      "emr-serverless:ListJobRuns", "emr-serverless:GetJobRun",
+      "emr-serverless:GetDashboardForJobRun", "emr-serverless:AccessInteractiveEndpoints",
+    ]
+    resources = ["*"]
+  }
+  statement {
+    sid       = "WorkspaceStorage"
+    actions   = ["s3:GetObject", "s3:PutObject", "s3:ListBucket"]
+    resources = [local.s3_bucket_arn, local.s3_objects_arn]
+  }
+  statement {
+    sid       = "PassServiceRoleForWorkspaceCreation"
+    actions   = ["iam:PassRole"]
+    resources = [aws_iam_role.service.arn]
+  }
+  statement {
+    sid       = "DescribeNetworkAndListRoles"
+    actions   = ["ec2:DescribeVpcs", "ec2:DescribeSubnets", "ec2:DescribeSecurityGroups", "iam:ListRoles"]
+    resources = ["*"]
+  }
+}
+
+data "aws_iam_policy_document" "iam_tier_intermediate" {
+  count                   = local.is_iam ? 1 : 0
+  source_policy_documents = [data.aws_iam_policy_document.iam_tier_basic[0].json]
+
+  statement {
+    sid = "EmrServerlessApplicationLifecycle"
+    actions = [
+      "emr-serverless:StartApplication", "emr-serverless:StopApplication",
+      "emr-serverless:StartJobRun", "emr-serverless:CancelJobRun",
+    ]
+    resources = ["*"]
+  }
+  statement {
+    sid       = "PassRuntimeRoleForJobRuns"
+    actions   = ["iam:PassRole"]
+    resources = [var.emr_serverless_runtime_role_arn_pattern]
+  }
+}
+
+locals {
+  # tier name -> permission-policy JSON, empty in SSO mode so no tier roles
+  # are created. one() safely yields null for the absent-count branch.
+  iam_tier_policy_json = local.is_iam ? {
+    basic        = one(data.aws_iam_policy_document.iam_tier_basic[*].json)
+    intermediate = one(data.aws_iam_policy_document.iam_tier_intermediate[*].json)
+  } : {}
+}
+
+resource "aws_iam_role" "tier" {
+  for_each           = local.iam_tier_policy_json
+  name               = "${var.name_prefix}-emr-studio-${each.key}"
+  assume_role_policy = data.aws_iam_policy_document.backend_assume[0].json
+  tags               = var.tags
+}
+
+resource "aws_iam_role_policy" "tier" {
+  for_each = local.iam_tier_policy_json
+  name     = "emr-studio-${each.key}"
+  role     = aws_iam_role.tier[each.key].id
+  policy   = each.value
 }
