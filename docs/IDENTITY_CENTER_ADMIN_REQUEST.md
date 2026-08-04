@@ -22,7 +22,7 @@ org-level AWS configuration that only your team can perform. It is:
 ## What we need you to set up
 
 1. **Enable IAM Identity Center** in the AWS Organizations management account
-   (or a delegated-admin account), in region **`<our-region>`**. This
+   (or a delegated-admin account), in region **`us-east-1`**. This
    requires an AWS Organizations org — a single-account org is fine if we are
    not multi-account.
 
@@ -52,7 +52,7 @@ org-level AWS configuration that only your team can perform. It is:
 
 - Confirmation that Identity Center is **enabled**, plus the **region** and
   whether it is the **management account** or a **delegated-admin account**.
-- **Confirmation that our dataplane account (`<dataplane-account-id>`) is a
+- **Confirmation that our dataplane account (`797771596368`) is a
   member of the same AWS Organization** as this Identity Center instance. Our
   EMR Studio session mappings reference your groups by name across accounts,
   which only works within one Organization — if the dataplane account is in a
@@ -84,7 +84,7 @@ CI/CD role's permissions boundary currently **denies** those actions, so our
 pipeline cannot create the Studio. We need you to pick one of:
 
 - **Option A — grant the writes.** Allow our CI/CD role
-  (`<cicd-role-arn>`) to perform `sso:CreateApplication`,
+  (`arn:aws:iam::797771596368:role/G-ROLE-AWS-ENTERPRISE-CICD`) to perform `sso:CreateApplication`,
   `sso:CreateManagedApplicationInstance` (and, for teardown,
   `sso:DeleteManagedApplicationInstance` / `sso:DeleteApplication`) on your
   instance and the `aws:applicationProvider/emrstudio` provider — scoped to
