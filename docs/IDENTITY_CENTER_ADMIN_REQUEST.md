@@ -21,10 +21,24 @@ org-level AWS configuration that only your team can perform. It is:
 
 ## What we need you to set up
 
-1. **Enable IAM Identity Center** in the AWS Organizations management account
-   (or a delegated-admin account), in region **`us-east-1`**. This
-   requires an AWS Organizations org — a single-account org is fine if we are
-   not multi-account.
+1. **Confirm the IAM Identity Center instance and its home region.** A failed
+   `CreateStudio` from our pipeline already references instance
+   **`ssoins-72234c3bde346d6c`**, so an instance appears to be enabled in your
+   org — we mainly need to know **which region it lives in**, because Identity
+   Center has one home region per org and our dataplane pipeline must run in
+   that same region to reference it. (Our platform otherwise runs in
+   **`us-east-1`**; if the instance is elsewhere, that mismatch is the likely
+   cause of the "resource does not exist in this Region" error we hit — see
+   note below.) If no instance is in fact enabled, please **enable it** (a
+   single-account AWS Organizations org is fine if we are not multi-account)
+   and tell us the region.
+
+   > **Region-mismatch symptom:** our `CreateStudio` failed with
+   > *"…on resource `arn:aws:sso:::instance/ssoins-72234c3bde346d6c` because
+   > the resource does not exist in this Region…"* — which happens when the
+   > Studio is created in a different region than the Identity Center instance.
+   > Confirming the instance's home region resolves this half of the error;
+   > the permissions half is covered under "EMR Studio creation permissions".
 
 2. **Federate Entra ID as the external identity provider.** Set up the
    SAML/OIDC trust between Identity Center and our Entra tenant. This is a
@@ -50,8 +64,9 @@ org-level AWS configuration that only your team can perform. It is:
 
 ## What we need back from you
 
-- Confirmation that Identity Center is **enabled**, plus the **region** and
-  whether it is the **management account** or a **delegated-admin account**.
+- The **home region** of instance `ssoins-72234c3bde346d6c` (per step 1), and
+  whether it is administered from the **management account** or a
+  **delegated-admin account**.
 - **Confirmation that our dataplane account (`797771596368`) is a
   member of the same AWS Organization** as this Identity Center instance. Our
   EMR Studio session mappings reference your groups by name across accounts,
