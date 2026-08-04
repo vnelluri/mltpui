@@ -12,7 +12,7 @@ per-account pipeline root, e.g.:
 module "emr_studio" {
   source = "git::https://<host>/tmt.git//backend/iac-emr-studio?ref=main"
 
-  name_prefix         = "ml-platform"
+  name_prefix         = "tmt"
   vpc_id              = var.vpc_id
   subnet_ids          = var.private_subnet_ids
   default_s3_location = "s3://ml-platform-artifacts-prod/emr-studio-workspaces"

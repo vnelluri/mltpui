@@ -12,7 +12,7 @@ per-account pipeline root, e.g.:
 module "backend" {
   source = "git::https://<host>/tmt.git//backend/iac?ref=main"
 
-  name_prefix          = "ml-platform"
+  name_prefix          = "tmt"
   cluster_arn          = aws_ecs_cluster.main.arn
   image                = "${local.ecr}/ml-platform-backend:${var.image_tag}"
   subnet_ids           = var.private_subnet_ids
