@@ -130,7 +130,7 @@ Create one EMR Studio with these inputs (a single `CreateStudio` call):
 | Input | Value | Source |
 |---|---|---|
 | Auth mode | **`SSO`** | you set this |
-| Name | `tmt-studio` | our convention |
+| Name | `ml-platform-studio` | our convention |
 | Service role | *(ARN)* | our output `service_role_arn` |
 | User role | *(ARN)* — **required in SSO mode** | our output `user_role_arn` |
 | Engine security group | *(sg-…)* | our output `engine_security_group_id` |
@@ -149,7 +149,7 @@ Studio from it:
 
 ```
 EMR Studio to create (SSO mode):
-  Name:                       tmt-studio
+  Name:                       ml-platform-studio
   Auth mode:                  SSO
   Region:                     <same region as ssoins-72234c3bde346d6c>
   Service role ARN:           <terraform output service_role_arn>
@@ -165,7 +165,7 @@ CLI equivalent (same values):
 
 ```bash
 aws emr create-studio \
-  --name tmt-studio \
+  --name ml-platform-studio \
   --auth-mode SSO \
   --region <instance-region> \
   --vpc-id <vpc-id> \

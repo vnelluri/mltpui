@@ -1,7 +1,7 @@
 variable "name_prefix" {
-  description = "Prefix for all named resources (e.g. tmt)."
+  description = "Prefix for all named resources (e.g. ml-platform)."
   type        = string
-  default     = "tmt"
+  default     = "ml-platform"
 }
 
 variable "vpc_id" {

@@ -10,7 +10,7 @@ Instantiate from your per-account pipeline root:
 module "frontend" {
   source = "git::https://<host>/tmt.git//frontend/iac?ref=main"
 
-  name_prefix        = "tmt"
+  name_prefix        = "ml-platform"
   cluster_arn        = aws_ecs_cluster.main.arn
   image              = "${local.ecr}/ml-platform-frontend:${var.image_tag}"
   subnet_ids         = var.private_subnet_ids
