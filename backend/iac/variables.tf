@@ -98,7 +98,7 @@ variable "dataplane_runtime_role_arn" {
 }
 
 variable "emr_studio_tier_role_arns" {
-  description = "EMR Studio IAM auth mode: ARNs of the basic/intermediate tier roles (from the iac-emr-studio module's tier_role_arns output) the backend may assume to presign Studio URLs. Empty for SSO mode."
+  description = "EMR Studio IAM auth mode: ARNs of the basic/intermediate tier roles (from the tmt-dataplane emr-studio module's tier_role_arns output) the backend may assume to presign Studio URLs. Empty for SSO mode."
   type        = list(string)
   default     = []
 }
@@ -110,19 +110,19 @@ variable "emr_auth_mode" {
 }
 
 variable "emr_studio_id" {
-  description = "IAM mode: the EMR Studio id the backend presigns into (the iac-emr-studio module's studio_id output). Unused in SSO mode."
+  description = "IAM mode: the EMR Studio id the backend presigns into (the tmt-dataplane emr-studio module's studio_id output). Unused in SSO mode."
   type        = string
   default     = ""
 }
 
 variable "emr_studio_basic_role_arn" {
-  description = "IAM mode: tier_role_arns[\"basic\"] from the iac-emr-studio module. Unused in SSO mode."
+  description = "IAM mode: tier_role_arns[\"basic\"] from the tmt-dataplane emr-studio module. Unused in SSO mode."
   type        = string
   default     = ""
 }
 
 variable "emr_studio_intermediate_role_arn" {
-  description = "IAM mode: tier_role_arns[\"intermediate\"] from the iac-emr-studio module. Unused in SSO mode."
+  description = "IAM mode: tier_role_arns[\"intermediate\"] from the tmt-dataplane emr-studio module. Unused in SSO mode."
   type        = string
   default     = ""
 }

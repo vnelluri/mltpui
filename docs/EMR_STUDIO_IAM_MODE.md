@@ -78,7 +78,7 @@ isolation (neither mode does without extra tag controls).
   cryptographically distinct Studio identity per person. **Confirm this level of
   attribution satisfies MRM before adopting.**
 
-## Terraform (`backend/iac-emr-studio`)
+## Terraform (`tmt-dataplane/modules/emr-studio`)
 
 `auth_mode = "IAM"` (now the module default — set `"SSO"` for the Identity
 Center path):
@@ -96,7 +96,7 @@ Center path):
 
 ```hcl
 module "emr_studio" {
-  source                 = "git::https://<host>/tmt.git//backend/iac-emr-studio?ref=main"
+  source                 = "./modules/emr-studio"
   name_prefix            = "ml-platform"
   vpc_id                 = var.vpc_id
   subnet_ids             = var.private_subnet_ids

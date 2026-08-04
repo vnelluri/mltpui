@@ -198,7 +198,7 @@ sync are in place.
 ## Appendix: EMR Studio IAM policies (for reference only)
 
 **You do not need to create these.** They are provisioned by our Terraform
-module (`backend/iac-emr-studio`) in the account where the Studio lives, and
+module (`tmt-dataplane/modules/emr-studio`) in the account where the Studio lives, and
 are included here only so you can review the access the platform grants. The
 `Resource` ARNs below use our example Workspace bucket
 (`s3://ml-platform-artifacts-prod/emr-studio-workspaces`); the module derives

@@ -2,8 +2,8 @@
 
 How a "Launch EMR Studio" click in the UI becomes an authenticated notebook
 session, and where `EMR_STUDIO_URL` comes from. Companion to
-[ARCHITECTURE.md](../ARCHITECTURE.md) §3.6/§4.1 and
-[backend/iac-emr-studio/README.md](../backend/iac-emr-studio/README.md).
+[ARCHITECTURE.md](../ARCHITECTURE.md) §3.6/§4.1 and the EMR Studio module's
+README (now in the companion `tmt-dataplane` repo, `modules/emr-studio`).
 
 > This document describes the **SSO / IAM Identity Center** auth mode. The
 > platform now **defaults to IAM mode** (no Identity Center — the backend
@@ -106,7 +106,7 @@ Studios ship.
 The value originates in Terraform and reaches the app via SSM:
 
 ```
-backend/iac-emr-studio (module)          Pipeline root                Backend task
+tmt-dataplane/modules/emr-studio (module)          Pipeline root                Backend task
 ───────────────────────────────          ─────────────                ────────────
 aws_emr_studio.this.url                  aws_ssm_parameter            ECS task definition
   └─ output "url" ─────────────────────►  /ml-platform/emr/           injects SSM param as
@@ -115,18 +115,18 @@ aws_emr_studio.this.url                  aws_ssm_parameter            ECS task d
                                                                            settings.EMR_STUDIO_URL
 ```
 
-1. **Module output** — `backend/iac-emr-studio/outputs.tf` exposes `url`,
-   the `aws_emr_studio` resource's access URL (the module is provider-less;
-   instantiate it from your pipeline root — the **backend** pipeline is the
-   one that applies it, with a dataplane-account provider alias if you run
-   the two-account split).
+1. **Module output** — `tmt-dataplane/modules/emr-studio/outputs.tf` exposes `url`,
+   the `aws_emr_studio` resource's access URL. The module is applied by
+   **`tmt-dataplane`** (from its `account-baseline` layer, in the dataplane
+   account); in SSO mode the operator writes that `url` output to the
+   control-plane SSM parameter below.
 
 2. **Pipeline root writes SSM** — per the module README, the root maps the
    output into the control-plane parameter the backend expects:
 
    ```hcl
    module "emr_studio" {
-     source = "git::https://<host>/tmt.git//backend/iac-emr-studio?ref=main"
+     source = "./modules/emr-studio"
 
      name_prefix         = "ml-platform"
      vpc_id              = var.vpc_id
@@ -166,8 +166,8 @@ different access paths**. The design keeps them apart on purpose, and
 conflating them is the usual source of confusion.
 
 The placement fact that makes this work: in the two-account split the
-**Studio is deployed into the dataplane account** (§4), applied by the
-backend pipeline through a dataplane provider alias, *next to* the per-tenant
+**Studio is deployed into the dataplane account** (§4), applied by
+`tmt-dataplane` (from its `account-baseline` layer), *next to* the per-tenant
 EMR Serverless applications. That is what makes the notebook attach
 same-account and keeps the control plane out of the runtime path.
 
@@ -237,7 +237,7 @@ needs to be told about it. Each piece lives here:
 | Piece | Account | Notes |
 |---|---|---|
 | IAM Identity Center instance (Entra federation, SCIM group sync) | **Org management account** (or delegated admin) — *neither* control-plane nor dataplane | Organization-level service, enabled once; this is where the Entra IdP federation and `myapp-*` group sync are configured |
-| EMR Studio resource + session mappings | **Dataplane account** | Created by `backend/iac-emr-studio` (applied by the backend pipeline via a dataplane provider alias), next to the EMR Serverless applications it attaches to. Works from a member account as long as it belongs to the org where Identity Center is enabled; session mappings reference Identity Center identities by name but are created here. **Exception:** `CreateStudio` in SSO mode calls `sso:CreateApplication` in Identity Center; if the pipeline's role can't (e.g. a permissions-boundary deny), set `create_studio = false` and an Identity Center admin creates the Studio out-of-band — this module still owns the roles/SGs/policies and consumes the passed-in `studio_id`/`studio_url` (module README, "Admin-owned Studio"). |
+| EMR Studio resource + session mappings | **Dataplane account** | Created by `tmt-dataplane/modules/emr-studio` (applied by tmt-dataplane (account-baseline)), next to the EMR Serverless applications it attaches to. Works from a member account as long as it belongs to the org where Identity Center is enabled; session mappings reference Identity Center identities by name but are created here. **Exception:** `CreateStudio` in SSO mode calls `sso:CreateApplication` in Identity Center; if the pipeline's role can't (e.g. a permissions-boundary deny), set `create_studio = false` and an Identity Center admin creates the Studio out-of-band — this module still owns the roles/SGs/policies and consumes the passed-in `studio_id`/`studio_url` (module README, "Admin-owned Studio"). |
 | SSM parameter `/ml-platform/emr/studio-url` | **Control-plane account** | The only Studio-related thing in the control plane: the URL string the backend reads to deep-link |
 | Access-portal tile (optional) | Org management account | Purely cosmetic: a custom app/bookmark in the Identity Center access portal pointing at the dataplane Studio URL. The platform doesn't rely on it — users arrive via the app's launch button |
 
@@ -257,9 +257,10 @@ Everything the flow above assumes is already in place:
 - **`session_mappings` populated** — keys must exactly match Identity Center
   identity names (group names with the default
   `session_identity_type = "GROUP"`). Empty map = nobody can start a session.
-- **`backend/iac-emr-studio` applied** by the backend pipeline — into the
-  dataplane account when running the two-account split (next to the EMR
-  Serverless applications it attaches to), or the single account otherwise.
+- **`tmt-dataplane/modules/emr-studio` applied** by `tmt-dataplane` (from its
+  `account-baseline` layer) — into the dataplane account when running the
+  two-account split (next to the EMR Serverless applications it attaches to),
+  or the single account otherwise.
 - **SSM parameter `/ml-platform/emr/studio-url` written** from the module's
   `url` output, and the backend ECS service (re)deployed so the task picks
   it up.
