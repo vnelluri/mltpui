@@ -12,8 +12,12 @@ Identity Center**, federated to our existing **Entra ID** tenant. This is
 org-level AWS configuration that only your team can perform. It is:
 
 - **separate** from the app's own login (which uses AWS Cognito), and
-- **separate** from any Terraform we run (we create the EMR Studio resource,
-  its session mappings, and IAM roles ourselves, once your part is in place).
+- **mostly separate** from the Terraform we run: we create the IAM roles,
+  security groups, and session policies ourselves, and normally the EMR Studio
+  resource and its session mappings too. The one exception is called out under
+  "EMR Studio creation permissions" below — creating an SSO-mode Studio writes
+  into *your* Identity Center instance, which our CI/CD role may not be allowed
+  to do.
 
 ## What we need you to set up
 
@@ -70,14 +74,46 @@ org-level AWS configuration that only your team can perform. It is:
   users, please notify us before renaming, restructuring, or removing any of
   these groups so we can update our mappings in step.
 
+## EMR Studio creation permissions (one decision we need from you)
+
+Creating an EMR Studio in **SSO auth mode** is not purely an EMR action: the
+`CreateStudio` API registers the Studio as a managed application **inside your
+Identity Center instance**, so it calls `sso:CreateApplication` and
+`sso:CreateManagedApplicationInstance` against your instance. Our dataplane
+CI/CD role's permissions boundary currently **denies** those actions, so our
+pipeline cannot create the Studio. We need you to pick one of:
+
+- **Option A — grant the writes.** Allow our CI/CD role
+  (`<cicd-role-arn>`) to perform `sso:CreateApplication`,
+  `sso:CreateManagedApplicationInstance` (and, for teardown,
+  `sso:DeleteManagedApplicationInstance` / `sso:DeleteApplication`) on your
+  instance and the `aws:applicationProvider/emrstudio` provider — scoped to
+  that instance only. Then our pipeline creates the Studio as normal.
+- **Option B — you create the Studio.** You (or whoever holds Identity Center
+  write access) create the EMR Studio out-of-band, using the IAM role ARNs and
+  security-group IDs we hand you from our Terraform, and return its **Studio ID
+  and access URL**. Our pipeline runs with `create_studio = false` and manages
+  everything else. This keeps org-level `sso:` writes off our CI/CD role.
+
+Related but narrower: **session mappings** (which grant each group a `basic`/
+`intermediate` tier) call `sso:CreateApplicationAssignment` + the identity-store
+reads already requested above — *not* `CreateApplication`. If your boundary
+denies only the Studio-creation writes, our pipeline can still own session
+mappings; if it denies assignments too, you'd own those as well. Please tell us
+which your boundary blocks.
+
 ## What you do NOT need to do
 
-- Create the EMR Studio resource itself.
-- Create any session mappings, S3 buckets, or IAM roles.
-- Generate or configure the Studio access URL.
+- Create the IAM roles, security groups, session policies, or S3 buckets — all
+  ours, via Terraform.
+- Create the EMR Studio resource **unless we pick Option B above**; by default
+  it is ours to create.
+- Generate or configure the Studio access URL (AWS emits it when the Studio is
+  created; under Option B you return the value AWS gives you, nothing more).
 
-All of the above is on the ML Platform team's side, via Terraform, once
-Identity Center federation and group sync are in place.
+Everything not listed under "EMR Studio creation permissions" is on the ML
+Platform team's side, via Terraform, once Identity Center federation and group
+sync are in place.
 
 ## Appendix: EMR Studio IAM policies (for reference only)
 

@@ -254,7 +254,7 @@ module's `README.md`.
 |---|---|
 | `backend/iac` | Backend ECS task definition + service, CloudWatch log group, execution role (image pull / logs / SSM+secret injection), task role (runtime permissions) |
 | `frontend/iac` | Frontend ECS task definition + service. Task role intentionally empty — static serving only |
-| `backend/iac-emr-studio` | Platform-global EMR Studio (SSO): two security groups, service role, shared user role, `basic`/`intermediate` session policies, session mappings |
+| `backend/iac-emr-studio` | Platform-global EMR Studio (SSO): two security groups, service role, shared user role, `basic`/`intermediate` session policies, and — unless `create_studio = false` — the Studio itself plus its session mappings. Set `create_studio = false` when the CI/CD role can't perform the `sso:` writes `CreateStudio` needs; an Identity Center admin then creates the Studio out-of-band and its id/url are passed back in (see the module README). |
 
 Not created here (bring your own from the pipeline root): VPC/subnets, ECS
 cluster, ALB + target groups, security groups, DynamoDB table, S3 buckets,

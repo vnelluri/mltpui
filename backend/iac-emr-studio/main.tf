@@ -248,10 +248,34 @@ locals {
     basic        = aws_iam_policy.session_basic.arn
     intermediate = aws_iam_policy.session_intermediate.arn
   }
+
+  # The Studio this module operates on: the one it creates, or (when
+  # create_studio = false) the admin-created one passed in. one() yields null
+  # for the absent branch so the conditional never indexes an empty list.
+  studio_id_effective  = var.create_studio ? one(aws_emr_studio.this[*].id) : var.studio_id
+  studio_url_effective = var.create_studio ? one(aws_emr_studio.this[*].url) : var.studio_url
+}
+
+# When create_studio = false the Studio is created out-of-band; both
+# identifiers must then be supplied (Terraform < 1.9 can't cross-reference
+# variables in a validation block, so enforce it here).
+resource "terraform_data" "require_external_studio" {
+  lifecycle {
+    precondition {
+      condition     = var.create_studio || (var.studio_id != "" && var.studio_url != "")
+      error_message = "create_studio = false requires both studio_id and studio_url (the admin-created Studio's identifiers)."
+    }
+  }
 }
 
 # ── Studio ────────────────────────────────────────────────────────────────────
+# Skipped when create_studio = false: an Identity Center admin creates the
+# Studio out-of-band (CreateStudio in SSO mode needs sso: write permissions a
+# locked-down CI/CD role may lack), passing service_role/user_role/SG ids from
+# this module's outputs; its id/url come back in via studio_id/studio_url.
 resource "aws_emr_studio" "this" {
+  count = var.create_studio ? 1 : 0
+
   name                        = "${var.name_prefix}-studio"
   auth_mode                   = "SSO"
   default_s3_location         = var.default_s3_location
@@ -268,11 +292,14 @@ resource "aws_emr_studio" "this" {
 # Grants IAM Identity Center groups/users access; the identity names must
 # already exist in Identity Center (SCIM-synced from the Entra security
 # groups documented in the platform README) — this module does not create
-# them.
+# them. Works against either the module-created or the admin-created Studio.
+# If the CI/CD role also cannot create session mappings (sso:CreateApplication-
+# Assignment / identitystore reads), leave session_mappings empty and have the
+# admin own them too.
 resource "aws_emr_studio_session_mapping" "this" {
   for_each = var.session_mappings
 
-  studio_id          = aws_emr_studio.this.id
+  studio_id          = local.studio_id_effective
   identity_type      = var.session_identity_type
   identity_name      = each.key
   session_policy_arn = local.session_policy_arns[each.value]

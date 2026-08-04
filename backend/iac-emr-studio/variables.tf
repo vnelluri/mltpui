@@ -47,6 +47,34 @@ variable "session_identity_type" {
   default     = "GROUP"
 }
 
+variable "create_studio" {
+  description = <<-EOT
+    Whether this module creates the aws_emr_studio resource. Creating a Studio
+    in SSO auth mode calls sso:CreateApplication /
+    sso:CreateManagedApplicationInstance to register it in IAM Identity Center;
+    a locked-down CI/CD role (e.g. one whose permissions boundary denies those
+    actions) cannot do that. Set false to have an Identity Center admin create
+    the Studio out-of-band and pass its identifiers via studio_id/studio_url —
+    this module then still manages the security groups, IAM roles, session
+    policies, and (permissions permitting) session_mappings. Default true keeps
+    the original single-apply behaviour.
+  EOT
+  type        = bool
+  default     = true
+}
+
+variable "studio_id" {
+  description = "ID of an externally created (admin-owned) EMR Studio. Required when create_studio = false — used for session mappings and the studio_id output; ignored when create_studio = true."
+  type        = string
+  default     = ""
+}
+
+variable "studio_url" {
+  description = "Access URL of an externally created (admin-owned) EMR Studio. Required when create_studio = false — surfaced as the url output (which SSM feeds to the backend); ignored when create_studio = true."
+  type        = string
+  default     = ""
+}
+
 variable "tags" {
   description = "Tags applied to all resources."
   type        = map(string)

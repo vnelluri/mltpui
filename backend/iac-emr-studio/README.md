@@ -42,6 +42,44 @@ resource "aws_ssm_parameter" "emr_studio_url" {
 - `session_mappings` keys must match Identity Center identity **names**
   exactly (group names if `session_identity_type = "GROUP"`, the default).
 
+## Admin-owned Studio (`create_studio = false`)
+
+Creating an EMR Studio in SSO auth mode makes EMR register it as a managed
+application in IAM Identity Center — the `CreateStudio` call internally invokes
+`sso:CreateApplication` / `sso:CreateManagedApplicationInstance`. A locked-down
+CI/CD role often can't do that (e.g. a permissions boundary with an explicit
+deny on those actions), so `terraform apply` fails on the `aws_emr_studio`
+resource even though the rest of the module would succeed.
+
+Set `create_studio = false` to split the work:
+
+- **This module still creates** the security groups, service/user roles, and
+  the `basic`/`intermediate` session policies — none of which touch Identity
+  Center — and exposes their ARNs/IDs as outputs.
+- **An Identity Center admin creates the Studio out-of-band** (console, CLI, or
+  their own Terraform with `sso:` permissions), passing this module's
+  `service_role_arn`, `user_role_arn`, `engine_security_group_id`,
+  `workspace_security_group_id`, plus your VPC/subnets and `default_s3_location`.
+- **You pass the result back** via `studio_id` and `studio_url`; the module
+  surfaces `studio_url` as the `url` output (so the SSM/`EMR_STUDIO_URL` wiring
+  is unchanged) and uses `studio_id` for session mappings.
+
+Deliberately **not** importing `aws_emr_studio` into this state is the safer
+choice: since the CI/CD role can't `sso:DeleteManagedApplicationInstance`, a
+`terraform destroy` of an imported Studio would fail — leaving it unmanaged
+here means the pipeline can never break it.
+
+**Session mappings** still reference the (now external) Studio and are created
+by this module. `CreateStudioSessionMapping` calls
+`sso:CreateApplicationAssignment` + identity-store reads — a *narrower*
+permission than `CreateApplication`, so the boundary may allow it even when it
+blocks Studio creation. If it doesn't, leave `session_mappings = {}` and have
+the admin own the mappings too.
+
+Ordering: apply this module (roles/SGs/policies) → hand the outputs to the
+admin → admin creates the Studio → re-apply with `studio_id`/`studio_url` set
+(and `session_mappings` if permitted).
+
 ## Known limitation (matches the platform README)
 
 The Studio is **platform-global** while jobs/data are **per-tenant** — the
@@ -71,8 +109,8 @@ a user's group is mapped to.
   location plus read/attach access to EMR Serverless.
 - Two customer-managed session policies (`basic`, `intermediate`) used by
   `session_mappings`.
-- The `aws_emr_studio` resource itself and its `aws_emr_studio_session_mapping`
-  entries.
+- The `aws_emr_studio` resource itself (unless `create_studio = false`) and its
+  `aws_emr_studio_session_mapping` entries.
 
 ## Variables of note
 
@@ -85,3 +123,7 @@ a user's group is mapped to.
 - `session_mappings` — `map(string)` of identity name → `"basic"` |
   `"intermediate"`. Empty by default; without at least one entry, nobody can
   open a session against the Studio.
+- `create_studio` — `bool`, default `true`. Set `false` for the admin-owned
+  Studio split above; then `studio_id` and `studio_url` are **required**.
+- `studio_id` / `studio_url` — identifiers of an externally created Studio,
+  used only when `create_studio = false`.

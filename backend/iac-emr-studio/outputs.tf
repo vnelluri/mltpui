@@ -1,11 +1,11 @@
 output "studio_id" {
-  description = "EMR Studio ID."
-  value       = aws_emr_studio.this.id
+  description = "EMR Studio ID (module-created, or the admin-created studio_id when create_studio = false)."
+  value       = local.studio_id_effective
 }
 
 output "url" {
-  description = "Studio access URL — set this as the backend's EMR_STUDIO_URL (see backend/iac's ssm/emr/studio-url parameter)."
-  value       = aws_emr_studio.this.url
+  description = "Studio access URL — set this as the backend's EMR_STUDIO_URL (see backend/iac's ssm/emr/studio-url parameter). Module-created, or the passed-in studio_url when create_studio = false."
+  value       = local.studio_url_effective
 }
 
 output "service_role_arn" {
