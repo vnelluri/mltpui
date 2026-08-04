@@ -103,13 +103,13 @@ class Settings(BaseSettings):
     # tenant-prefixed; per-tenant Studios are a later release.
     EMR_STUDIO_URL: Optional[str] = None
     EMR_MOCK_MODE: bool = True
-    # EMR Studio authentication mode. "SSO" (default): the backend deep-links to
-    # the static EMR_STUDIO_URL and Identity Center supplies each user's Entra
-    # identity. "IAM": no Identity Center — the backend assumes a per-tier role
-    # (RoleSessionName = the user's stable id, so EMR Studio's per-user
-    # creatorUserId Workspace ownership holds) and calls CreateStudioPresignedUrl
-    # to deep-link the user in. See docs/EMR_STUDIO_IAM_MODE.md.
-    EMR_AUTH_MODE: str = "SSO"
+    # EMR Studio authentication mode. "IAM" (default): no Identity Center — the
+    # backend assumes a per-tier role (RoleSessionName = the user's stable id, so
+    # EMR Studio's per-user creatorUserId Workspace ownership holds) and calls
+    # CreateStudioPresignedUrl to deep-link the user in. "SSO": the backend
+    # deep-links the static EMR_STUDIO_URL and Identity Center supplies each
+    # user's Entra identity. See docs/EMR_STUDIO_IAM_MODE.md.
+    EMR_AUTH_MODE: str = "IAM"
     EMR_STUDIO_ID: Optional[str] = None  # IAM mode: the Studio to presign into
     EMR_STUDIO_BASIC_ROLE_ARN: Optional[str] = None
     EMR_STUDIO_INTERMEDIATE_ROLE_ARN: Optional[str] = None
@@ -199,6 +199,16 @@ class Settings(BaseSettings):
             raise ValueError("AUTH_MODE must be 'dev' or 'prod'")
         return value
 
+    @field_validator("EMR_AUTH_MODE")
+    @classmethod
+    def _normalise_emr_auth_mode(cls, v: str) -> str:
+        # Uppercased so notebook_service's `== "IAM"` check can't be defeated by
+        # a lowercase env value silently falling back to the SSO path.
+        value = (v or "IAM").strip().upper()
+        if value not in {"SSO", "IAM"}:
+            raise ValueError("EMR_AUTH_MODE must be 'SSO' or 'IAM'")
+        return value
+
     # Every mock/bypass flag defaults to the local-dev value and env-var typos
     # are silently ignored (extra="ignore"), so a prod deployment missing one
     # variable would otherwise degrade SILENTLY: token audience/issuer checks
@@ -227,6 +237,16 @@ class Settings(BaseSettings):
         ):
             if getattr(self, flag):
                 problems.append(f"{flag} is true")
+        # IAM-mode notebooks need the Studio id + both tier role ARNs, or launch
+        # fails only when a user clicks — check at boot like the flags above.
+        if self.EMR_AUTH_MODE == "IAM":
+            if not self.EMR_STUDIO_ID:
+                problems.append("EMR_AUTH_MODE=IAM but EMR_STUDIO_ID is not set")
+            if not (self.EMR_STUDIO_BASIC_ROLE_ARN and self.EMR_STUDIO_INTERMEDIATE_ROLE_ARN):
+                problems.append(
+                    "EMR_AUTH_MODE=IAM but EMR_STUDIO_BASIC_ROLE_ARN / "
+                    "EMR_STUDIO_INTERMEDIATE_ROLE_ARN are not both set"
+                )
         if problems:
             raise ValueError(
                 "Refusing to start with AUTH_MODE=prod and an unsafe "

@@ -1,12 +1,14 @@
-# backend/iac-emr-studio — Terraform module: EMR Studio (SSO auth mode)
+# backend/iac-emr-studio — Terraform module: EMR Studio
 
-Provisions the single, platform-global EMR Studio that the backend deep-links
-into (`EMR_STUDIO_URL`, see `backend/app/services/notebook_service.py`). The
-backend never calls the EMR Studio API itself — it only needs this module's
-`url` output.
+Provisions the single, platform-global EMR Studio the backend deep-links users
+into for notebook sessions.
+
+**`auth_mode` defaults to `"IAM"`** (no Identity Center — the backend presigns
+per user; see "IAM authentication mode" below). Set `auth_mode = "SSO"` for the
+Identity Center path (see "Prerequisites" and "Admin-owned Studio").
 
 This is a **module** (no provider/backend blocks) — instantiate it from your
-per-account pipeline root, e.g.:
+per-account pipeline root. Default (IAM) mode:
 
 ```hcl
 module "emr_studio" {
@@ -17,19 +19,16 @@ module "emr_studio" {
   subnet_ids          = var.private_subnet_ids
   default_s3_location = "s3://ml-platform-artifacts-prod/emr-studio-workspaces"
 
-  session_mappings = {
-    "myapp-platform-admin"      = "intermediate"
-    "myapp-team-a-datascientist" = "basic"
-    "myapp-team-b-datascientist" = "basic"
-  }
+  # IAM mode (default) requires the principal(s) allowed to presign:
+  backend_principal_arns = [var.backend_task_role_arn]
 }
 
-resource "aws_ssm_parameter" "emr_studio_url" {
-  name  = "/ml-platform/emr/studio-url"
-  type  = "String"
-  value = module.emr_studio.url
-}
+# Wire the outputs into the backend (see "IAM authentication mode"):
+#   module.emr_studio.studio_id, module.emr_studio.tier_role_arns
 ```
+
+For the SSO (Identity Center) path instead, set `auth_mode = "SSO"` and supply
+`session_mappings` — its inputs and prerequisites are below.
 
 ## Prerequisites (out of scope for this module)
 
@@ -162,7 +161,7 @@ a user's group is mapped to.
   Studio split above; then `studio_id` and `studio_url` are **required**.
 - `studio_id` / `studio_url` — identifiers of an externally created Studio,
   used only when `create_studio = false`.
-- `auth_mode` — `"SSO"` (default) or `"IAM"`; see "IAM authentication mode".
+- `auth_mode` — `"IAM"` (default) or `"SSO"`; see "IAM authentication mode".
 - `backend_principal_arns` — IAM mode only; principals allowed to assume the
   tier roles. **Required** when `auth_mode = "IAM"`.
 - `emr_serverless_runtime_role_arn_pattern` — IAM mode only; role(s) the

@@ -5,6 +5,12 @@ session, and where `EMR_STUDIO_URL` comes from. Companion to
 [ARCHITECTURE.md](../ARCHITECTURE.md) §3.6/§4.1 and
 [backend/iac-emr-studio/README.md](../backend/iac-emr-studio/README.md).
 
+> This document describes the **SSO / IAM Identity Center** auth mode. The
+> platform now **defaults to IAM mode** (no Identity Center — the backend
+> presigns a URL after assuming a per-tier role); see
+> [EMR_STUDIO_IAM_MODE.md](EMR_STUDIO_IAM_MODE.md). Read this doc when you set
+> `auth_mode = "SSO"` explicitly.
+
 The core design: the backend **deep-links** into a single, platform-global
 EMR Studio and never calls the EMR Studio API. There is no presigning for
 EMR Studio — the URL is static and identical for every user and tenant;

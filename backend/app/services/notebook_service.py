@@ -2,11 +2,11 @@
 
 EMR Studio has two auth modes (``EMR_AUTH_MODE``):
 
-- ``SSO`` (default): return the static Studio URL; Identity Center supplies the
-  user's Entra identity. No AWS API call.
-- ``IAM``: no Identity Center — assume the user's tier role and call
+- ``IAM`` (default): no Identity Center — assume the user's tier role and call
   ``CreateStudioPresignedUrl``, mirroring the SageMaker presign path. See
   ``docs/EMR_STUDIO_IAM_MODE.md``.
+- ``SSO``: return the static Studio URL; Identity Center supplies the user's
+  Entra identity. No AWS API call.
 
 In mock mode (``EMR_MOCK_MODE`` / ``SAGEMAKER_MOCK_MODE``) a fake session URL
 is returned instantly so the full notebook-launch flow can be exercised
@@ -23,6 +23,11 @@ from app.db.client import make_boto3_client
 from app.db.models import Role
 
 _SESSION_TTL_SECONDS = 3600
+# An EMR Studio IAM-mode presigned URL must be *redeemed* within a short window
+# (~5 min) — far shorter than the notional 1-hour session. Reflect that in the
+# stored urlExpiresAt so the UI doesn't invite a user to relaunch a dead link
+# from history.
+_EMR_IAM_PRESIGN_TTL_SECONDS = 300
 
 # Active role -> EMR Studio tier, mirroring the SSO session-policy tiers.
 # DataScientist attaches + runs (basic); Tenant/Platform admins additionally
@@ -59,14 +64,17 @@ class NotebookService:
         shared workspace. A fragment (not a query param) so it can never
         invalidate a presigned URL's signature.
         """
+        ttl = _SESSION_TTL_SECONDS
         if session_type == "sagemaker_studio":
             url = self.launch_sagemaker_studio(tenant_id, user_id)
         else:
             url = self.launch_emr_studio(tenant_id, user_id, role)
+            if settings.EMR_AUTH_MODE == "IAM" and not self.emr_mock:
+                ttl = _EMR_IAM_PRESIGN_TTL_SECONDS
         if usecase_id:
             url = f"{url}#collab=usecase:{usecase_id}"
         expires_at = (
-            datetime.now(timezone.utc) + timedelta(seconds=_SESSION_TTL_SECONDS)
+            datetime.now(timezone.utc) + timedelta(seconds=ttl)
         ).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
         return url, expires_at
 

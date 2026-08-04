@@ -49,23 +49,33 @@ locals {
     },
   )
 
-  plain_environment = {
-    AUTH_MODE                        = "prod"
-    AWS_REGION                       = var.region
-    DYNAMODB_TABLE_NAME              = var.dynamodb_table_name
-    S3_ARTIFACTS_BUCKET              = var.artifacts_bucket
-    EMR_MOCK_MODE                    = "false"
-    SAGEMAKER_MOCK_MODE              = "false"
-    SNOWFLAKE_MOCK_MODE              = "false"
-    TENANT_PROVISIONING_MOCK_MODE    = "false"
-    TENANT_PROVISIONING_EVENT_BUS    = local.provisioning_event_bus_name
-    PLATFORM_API_BASE_URL            = var.platform_api_base_url
-    SNOWFLAKE_OAUTH_INTEGRATION_NAME = "ml_platform_oauth"
-    SNOWFLAKE_DEFAULT_WAREHOUSE      = "COMPUTE_WH"
-    SNOWFLAKE_DEFAULT_ROLE           = "ML_PLATFORM_ROLE"
-    SECRETS_MANAGER_JOB_TOKEN_PREFIX = var.job_token_secret_prefix
-    DATAPLANE_RUNTIME_ROLE_ARN       = var.dataplane_runtime_role_arn == null ? "" : var.dataplane_runtime_role_arn
-  }
+  plain_environment = merge(
+    {
+      AUTH_MODE                        = "prod"
+      AWS_REGION                       = var.region
+      DYNAMODB_TABLE_NAME              = var.dynamodb_table_name
+      S3_ARTIFACTS_BUCKET              = var.artifacts_bucket
+      EMR_MOCK_MODE                    = "false"
+      SAGEMAKER_MOCK_MODE              = "false"
+      SNOWFLAKE_MOCK_MODE              = "false"
+      TENANT_PROVISIONING_MOCK_MODE    = "false"
+      TENANT_PROVISIONING_EVENT_BUS    = local.provisioning_event_bus_name
+      PLATFORM_API_BASE_URL            = var.platform_api_base_url
+      SNOWFLAKE_OAUTH_INTEGRATION_NAME = "ml_platform_oauth"
+      SNOWFLAKE_DEFAULT_WAREHOUSE      = "COMPUTE_WH"
+      SNOWFLAKE_DEFAULT_ROLE           = "ML_PLATFORM_ROLE"
+      SECRETS_MANAGER_JOB_TOKEN_PREFIX = var.job_token_secret_prefix
+      DATAPLANE_RUNTIME_ROLE_ARN       = var.dataplane_runtime_role_arn == null ? "" : var.dataplane_runtime_role_arn
+      EMR_AUTH_MODE                    = var.emr_auth_mode
+    },
+    # IAM auth mode only: the Studio id + tier role ARNs the backend presigns
+    # with. In SSO mode EMR_STUDIO_URL (an ssm_secret above) is used instead.
+    var.emr_auth_mode == "IAM" ? {
+      EMR_STUDIO_ID                    = var.emr_studio_id
+      EMR_STUDIO_BASIC_ROLE_ARN        = var.emr_studio_basic_role_arn
+      EMR_STUDIO_INTERMEDIATE_ROLE_ARN = var.emr_studio_intermediate_role_arn
+    } : {},
+  )
 }
 
 # ── Logging ──────────────────────────────────────────────────────────────────

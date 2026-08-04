@@ -103,6 +103,30 @@ variable "emr_studio_tier_role_arns" {
   default     = []
 }
 
+variable "emr_auth_mode" {
+  description = "EMR Studio auth mode the backend uses: \"IAM\" (default; presigns via the tier roles below — requires emr_studio_id + both tier role ARNs) or \"SSO\" (deep-links EMR_STUDIO_URL from SSM)."
+  type        = string
+  default     = "IAM"
+}
+
+variable "emr_studio_id" {
+  description = "IAM mode: the EMR Studio id the backend presigns into (the iac-emr-studio module's studio_id output). Unused in SSO mode."
+  type        = string
+  default     = ""
+}
+
+variable "emr_studio_basic_role_arn" {
+  description = "IAM mode: tier_role_arns[\"basic\"] from the iac-emr-studio module. Unused in SSO mode."
+  type        = string
+  default     = ""
+}
+
+variable "emr_studio_intermediate_role_arn" {
+  description = "IAM mode: tier_role_arns[\"intermediate\"] from the iac-emr-studio module. Unused in SSO mode."
+  type        = string
+  default     = ""
+}
+
 variable "provisioning_event_bus_arn" {
   description = "EventBridge bus ARN for TenantProvisioningRequested events. Null uses the account's default bus. The bus NAME the app publishes to is derived from this same ARN, so IAM grant and publish target can never disagree."
   type        = string

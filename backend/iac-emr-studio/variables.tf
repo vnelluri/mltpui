@@ -49,15 +49,16 @@ variable "session_identity_type" {
 
 variable "auth_mode" {
   description = <<-EOT
-    EMR Studio authentication mode: "SSO" (IAM Identity Center — the default,
-    uses user_role + session_mappings) or "IAM" (no Identity Center — the
-    backend presigns a URL after assuming a per-tier role; see the module
-    README "IAM authentication mode"). IAM mode avoids the sso: writes that a
-    locked-down CI/CD role can't perform, at the cost of the backend calling
-    the EMR Studio API at launch time.
+    EMR Studio authentication mode. "IAM" (the default — no Identity Center; the
+    backend presigns a URL after assuming a per-tier role, so this REQUIRES
+    backend_principal_arns and ignores session_mappings) or "SSO" (IAM Identity
+    Center — uses user_role + session_mappings). IAM mode avoids the sso: writes
+    that a locked-down CI/CD role can't perform, at the cost of the backend
+    calling the EMR Studio API at launch time. See the module README
+    "IAM authentication mode".
   EOT
   type        = string
-  default     = "SSO"
+  default     = "IAM"
 
   validation {
     condition     = contains(["SSO", "IAM"], var.auth_mode)

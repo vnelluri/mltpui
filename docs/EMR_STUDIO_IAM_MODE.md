@@ -80,7 +80,8 @@ isolation (neither mode does without extra tag controls).
 
 ## Terraform (`backend/iac-emr-studio`)
 
-`auth_mode = "IAM"` (default stays `"SSO"`, so existing behaviour is unchanged):
+`auth_mode = "IAM"` (now the module default — set `"SSO"` for the Identity
+Center path):
 
 - **Creates** the Studio with `auth_mode = "IAM"` (no `user_role`), the two
   security groups, the service role, and **two assumable tier roles**
@@ -124,9 +125,10 @@ router already restricts launch to `TenantAdmin` / `DataScientist`).
 
 ## Switching between modes
 
-`auth_mode` and `EMR_AUTH_MODE` are toggles; SSO remains the default and is
-untouched. The two modes are mutually exclusive per Studio (the resource's
-`auth_mode` is immutable), so switching an existing Studio means replacing it.
+`auth_mode` and `EMR_AUTH_MODE` are toggles; **IAM is now the default**, so set
+both to `"SSO"` for the Identity Center path. The two modes are mutually
+exclusive per Studio (the resource's `auth_mode` is immutable), so switching an
+existing Studio means replacing it.
 
 ## Open items
 - **MRM sign-off** on the attribution model above.
