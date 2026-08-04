@@ -224,20 +224,27 @@ other short-lived records.
 Production runs across **two AWS accounts**:
 
 ```
-┌─ Control-plane account ─────────────────┐   ┌─ Dataplane account ──────────────┐
-│                                         │   │                                  │
-│  ALB ─► Frontend (ECS Fargate, nginx)   │   │  Per tenant (from tmt-dataplane):│
-│      └► Backend  (ECS Fargate :8000)    │   │   · EMR Serverless application   │
-│                                         │   │   · execution role               │
-│  DynamoDB (single table)                │   │     (ml-platform-tenant-*-exec)  │
-│  S3 artifacts bucket                    │   │   · tenant KMS key               │
-│  SSM Parameter Store  (/ml-platform/*)  │   │  Runtime role (ABAC, assumed     │
-│  Secrets Manager (OAuth secret,         │   │  with tenantId session tag)      │
-│                   per-job secrets)      │   │                                  │
-│  EventBridge (provisioning events) ─────┼──►│  reconcile pipeline              │
-│  CloudWatch Logs (/ecs/*-backend)       │   │                                  │
-└─────────────────────────────────────────┘   └──────────────────────────────────┘
-         ▲ Cognito (SAML ← Azure AD)               ▲ OAuth token exchange (Snowflake)
+┌─ Control-plane account (tmt monorepo) ──┐   ┌─ Dataplane account (tmt-dataplane) ─────┐
+│                                         │   │  account-baseline (applied once):       │
+│  ALB ─► Frontend (ECS Fargate, nginx)   │   │   · S3 artifacts bucket + CMK           │
+│      └► Backend  (ECS Fargate :8000)    │──►│   · provisioning EventBridge bus        │
+│                                         │   │   · dataplane-runtime role (ABAC)       │
+│  DynamoDB (single table)                │   │   · reconcile pipeline (CodeBuild)      │
+│  SSM Parameter Store  (/ml-platform/*)  │   │   · per-job token secrets               │
+│  Secrets Manager (Snowflake OAuth)      │   │   · EMR Studio + basic/intermediate     │
+│  CloudWatch Logs (/ecs/*-backend)       │   │     tier roles (IAM auth mode)          │
+│                                         │   │  Per tenant (reconcile loop):           │
+│                                         │   │   · EMR Serverless application          │
+│                                         │   │   · execution role (…-tenant-*-exec)    │
+│                                         │   │   · tenant KMS key                      │
+└─────────────────────────────────────────┘   └─────────────────────────────────────────┘
+    ▲ Cognito (SAML ← Azure AD)         backend → dataplane (cross-account):
+                                        PutEvents to the bus, AssumeRole the runtime
+                                        role (+tenantId tag) and the Studio tier roles,
+                                        and S3/KMS on the artifacts bucket by resource
+                                        policy. The artifacts bucket, provisioning bus,
+                                        and per-job secrets all live in the DATAPLANE
+                                        account; the backend reaches them cross-account.
 ```
 
 A **single-account deployment** is also supported: leave
@@ -254,37 +261,56 @@ module's `README.md`.
 |---|---|
 | `backend/iac` | Backend ECS task definition + service, CloudWatch log group, execution role (image pull / logs / SSM+secret injection), task role (runtime permissions) |
 | `frontend/iac` | Frontend ECS task definition + service. Task role intentionally empty — static serving only |
-| `backend/iac-emr-studio` | Platform-global EMR Studio (SSO): two security groups, service role, shared user role, `basic`/`intermediate` session policies, and — unless `create_studio = false` — the Studio itself plus its session mappings. Set `create_studio = false` when the CI/CD role can't perform the `sso:` writes `CreateStudio` needs; an Identity Center admin then creates the Studio out-of-band and its id/url are passed back in (see the module README). |
+| `backend/iac-emr-studio` | Platform-global EMR Studio + IAM. Default `auth_mode = "IAM"` (no Identity Center): the Studio (no user_role), two security groups, a service role, and two **assumable tier roles** (`basic`/`intermediate`) the backend presigns with. `auth_mode = "SSO"`: swaps the tier roles for a shared user role + `basic`/`intermediate` **session policies** + **session mappings** (Identity Center), and (unless `create_studio = false`, which lets an admin create the Studio out-of-band) the Studio itself. See the module README and `docs/EMR_STUDIO_IAM_MODE.md`. |
 
 Not created here (bring your own from the pipeline root): VPC/subnets, ECS
 cluster, ALB + target groups, security groups, DynamoDB table, S3 buckets,
 ECR repositories, SSM parameters, the Snowflake OAuth client secret, and
 everything in `tmt-dataplane`.
 
-**Why the Studio module lives at `backend/iac-emr-studio` and not in
-`tmt-dataplane`:** there are exactly three deploy pipelines — backend,
-frontend, and dataplane — and the **backend pipeline is the one that
-applies the Studio module**, so it lives alongside `backend/iac`. It
-stays out of `tmt-dataplane` deliberately:
+**Where the Studio module lives vs. who applies it.** The module *code*
+lives at `backend/iac-emr-studio` in this monorepo, but because it is
+provider-less and git-sourced, **any** pipeline can instantiate it — its
+file location does not decide which account or pipeline owns it. What
+decides ownership is lifecycle + where its I/O flows.
 
-- Its lifecycle is platform-global, applied-once infrastructure —
-  unlike `tmt-dataplane`, whose machinery is a per-tenant EventBridge
-  reconcile loop.
-- Its contracts point at the control plane: the `url` output lands in
-  control-plane SSM (`/ml-platform/emr/studio-url`, read by the
-  backend), and Workspace storage is the control-plane artifacts bucket.
-- The module is provider-less and instantiated via a git source, so
-  this location does not constrain which account it deploys into.
+**Recommended (with IAM mode as the default): `tmt-dataplane` applies it,
+from its `account-baseline` global layer.** `tmt-dataplane` is not only a
+per-tenant reconcile loop — its root also applies `account-baseline`, a
+**global, applied-once-per-account** stack (artifacts bucket, provisioning
+bus, the `dataplane-runtime` role). The Studio's applied-once-global
+lifecycle fits `account-baseline` exactly, and everything the module needs
+already lives there:
 
-Note the module is **not** part of the backend ECS deployment unit —
-the backend never calls the Studio API (§3.6); they merely share a
-pipeline. If you run the account split, the Studio must deploy into the
-dataplane account (next to the EMR Serverless applications it attaches
-to), so the backend pipeline needs a dataplane-account provider alias
-for this module. Revisit the placement when per-tenant Studios ship
-(§3.6 known limitation): at that point the Studio becomes a per-tenant
-dataplane resource and belongs in the `tmt-dataplane` reconcile
-pipeline.
+- All created resources are dataplane-account (Studio, tier roles, SGs),
+  next to the EMR Serverless apps they attach to.
+- Every input is already a `tmt-dataplane` variable: `backend_task_role_arn`
+  (→ `backend_principal_arns`, the tier-role trust), `subnet_ids`,
+  `security_group_ids`, `artifacts_bucket` (→ `default_s3_location` — the
+  artifacts bucket is a **dataplane** resource created by `account-baseline`,
+  reached by the backend cross-account), and the `…-tenant-*-exec` pattern
+  (→ the intermediate tier's `PassRole`).
+- Its outputs (`studio_id`, `tier_role_arns`) wire into the backend exactly
+  like `runtime_role_arn` / `event_bus_arn` already do — not a new
+  cross-pipeline burden.
+
+The costs of applying it there: the reconcile CodeBuild role must gain
+EMR-Studio + studio-IAM-role create permissions (today it is scoped to
+`…-tenant-*-exec`), the Studio's `service`/tier roles need KMS use on the
+artifacts CMK (same-account IAM grant), and the Studio is re-applied each
+reconcile (idempotent, as `account-baseline` already is).
+
+Historical note: this module was originally applied by the **backend**
+pipeline (with a dataplane-account provider alias) on the reasoning that its
+lifecycle didn't fit `tmt-dataplane` and its `url` output fed control-plane
+SSM. IAM mode (now the default) removed the SSM tie, and `account-baseline`
+provides the global layer that reasoning assumed absent — so the balance
+moved to `tmt-dataplane`. The module is **not** part of the backend ECS
+deployment unit either way; in IAM mode the backend calls
+`CreateStudioPresignedUrl` at launch (§3.6), in SSO mode it deep-links the
+static URL. Revisit again when **per-tenant Studios** ship (§3.6 known
+limitation): the Studio then becomes a per-tenant resource and moves into
+the `tmt-dataplane` reconcile loop proper.
 
 ### 4.2 Backend IAM (task role) — what the app may do
 

@@ -135,6 +135,17 @@ data "aws_iam_policy_document" "service" {
     ]
     resources = [local.s3_objects_arn]
   }
+
+  # Workspace autosave writes to the (SSE-KMS) artifacts bucket; without KMS
+  # use on its CMK, PutObject fails AccessDenied. Skipped for SSE-S3 buckets.
+  dynamic "statement" {
+    for_each = var.default_s3_location_kms_key_arn == "" ? [] : [1]
+    content {
+      sid       = "AllowWorkspaceBucketKms"
+      actions   = ["kms:Decrypt", "kms:GenerateDataKey", "kms:DescribeKey"]
+      resources = [var.default_s3_location_kms_key_arn]
+    }
+  }
 }
 
 resource "aws_iam_role_policy" "service" {
@@ -189,6 +200,15 @@ data "aws_iam_policy_document" "user" {
     sid       = "AllowWorkspaceBucketObjects"
     actions   = ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"]
     resources = [local.s3_objects_arn]
+  }
+
+  dynamic "statement" {
+    for_each = var.default_s3_location_kms_key_arn == "" ? [] : [1]
+    content {
+      sid       = "AllowWorkspaceBucketKms"
+      actions   = ["kms:Decrypt", "kms:GenerateDataKey", "kms:DescribeKey"]
+      resources = [var.default_s3_location_kms_key_arn]
+    }
   }
 }
 
@@ -391,6 +411,14 @@ data "aws_iam_policy_document" "iam_tier_basic" {
     sid       = "WorkspaceStorage"
     actions   = ["s3:GetObject", "s3:PutObject", "s3:ListBucket"]
     resources = [local.s3_bucket_arn, local.s3_objects_arn]
+  }
+  dynamic "statement" {
+    for_each = var.default_s3_location_kms_key_arn == "" ? [] : [1]
+    content {
+      sid       = "WorkspaceStorageKms"
+      actions   = ["kms:Decrypt", "kms:GenerateDataKey", "kms:DescribeKey"]
+      resources = [var.default_s3_location_kms_key_arn]
+    }
   }
   statement {
     sid       = "PassServiceRoleForWorkspaceCreation"

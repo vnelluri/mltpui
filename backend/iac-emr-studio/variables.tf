@@ -19,6 +19,12 @@ variable "default_s3_location" {
   type        = string
 }
 
+variable "default_s3_location_kms_key_arn" {
+  description = "KMS CMK ARN the default_s3_location bucket is SSE-encrypted with (e.g. tmt-dataplane's artifacts CMK). When set, the Studio service/user/tier roles get kms:Decrypt/GenerateDataKey/DescribeKey on it — required or Workspace autosave to an SSE-KMS bucket fails. Empty = bucket uses SSE-S3 (no grant needed)."
+  type        = string
+  default     = ""
+}
+
 variable "workspace_egress_cidrs" {
   description = "CIDRs the Workspace security group may reach on 443 (Studio control-plane API, git, package indexes). Restrict to VPC endpoint / NAT egress ranges where possible; defaults to unrestricted."
   type        = list(string)
