@@ -130,7 +130,7 @@ Create one EMR Studio with these inputs (a single `CreateStudio` call):
 | Input | Value | Source |
 |---|---|---|
 | Auth mode | **`SSO`** | you set this |
-| Name | `ml-platform-studio` | our convention |
+| Name | `tmt-studio` | our convention |
 | Service role | *(ARN)* | our output `service_role_arn` |
 | User role | *(ARN)* — **required in SSO mode** | our output `user_role_arn` |
 | Engine security group | *(sg-…)* | our output `engine_security_group_id` |
@@ -143,11 +143,29 @@ Create one EMR Studio with these inputs (a single `CreateStudio` call):
 > `ssoins-72234c3bde346d6c`** (per step 1). Creating it in another region is
 > exactly the "resource does not exist in this Region" failure we already hit.
 
-CLI equivalent (values from the packet we send):
+**The values packet we send you** — this is the whole handoff; we fill the
+right-hand side in after our `create_studio = false` apply, then you create the
+Studio from it:
+
+```
+EMR Studio to create (SSO mode):
+  Name:                       tmt-studio
+  Auth mode:                  SSO
+  Region:                     <same region as ssoins-72234c3bde346d6c>
+  Service role ARN:           <terraform output service_role_arn>
+  User role ARN:              <terraform output user_role_arn>
+  Engine security group:      <terraform output engine_security_group_id>
+  Workspace security group:   <terraform output workspace_security_group_id>
+  VPC ID:                     <our vpc_id>
+  Subnet IDs:                 <our subnet_ids>
+  Default S3 location:        s3://<bucket>/emr-studio-workspaces
+```
+
+CLI equivalent (same values):
 
 ```bash
 aws emr create-studio \
-  --name ml-platform-studio \
+  --name tmt-studio \
   --auth-mode SSO \
   --region <instance-region> \
   --vpc-id <vpc-id> \
