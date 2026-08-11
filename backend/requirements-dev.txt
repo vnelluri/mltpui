@@ -6,3 +6,6 @@
 # swap for LocalStack from the app's point of view, since both are just an
 # AWS-compatible HTTP endpoint that boto3 talks to via endpoint_url=.
 moto[server]==5.0.14
+
+# Backend unit tests (pytest ./tests). Not in the prod image.
+pytest==9.1.1

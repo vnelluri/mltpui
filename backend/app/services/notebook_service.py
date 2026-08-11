@@ -42,6 +42,11 @@ _EMR_TIER_BY_ROLE = {
 # STS RoleSessionName allows [\w+=,.@-] and max 64 chars.
 _ROLE_SESSION_NAME_RE = re.compile(r"[^\w+=,.@-]")
 
+# Studio ids whose IAM auth mode has been verified this process. A Studio's
+# auth mode is immutable, so once confirmed IAM we never describe it again —
+# the preflight costs one API call per Studio id, not one per launch.
+_verified_iam_studio_ids: set[str] = set()
+
 
 class NotebookService:
     def __init__(self) -> None:
@@ -154,9 +159,45 @@ class NotebookService:
             },
             cache_key=f"emr-studio:{session_name}:{int(creds['Expiration'].timestamp())}",
         )
+        self._assert_studio_iam_mode(emr, settings.EMR_STUDIO_ID)
         return emr.create_studio_presigned_url(StudioId=settings.EMR_STUDIO_ID)[
             "AuthorizedUrl"
         ]
+
+    @staticmethod
+    def _assert_studio_iam_mode(emr, studio_id: str) -> None:
+        """Preflight the Studio's auth mode before presigning.
+
+        ``CreateStudioPresignedUrl`` is only valid for IAM-auth-mode Studios.
+        Against an SSO (Identity Center) Studio it fails deep inside EMR with an
+        opaque ``HashCsrf is null or empty`` 400 — impossible to diagnose from
+        the call site. Describe the Studio once and fail with a self-explaining
+        error instead. Auth mode is immutable, so the result is cached per
+        Studio id (see ``_verified_iam_studio_ids``).
+        """
+        if studio_id in _verified_iam_studio_ids:
+            return
+        try:
+            studio = emr.describe_studio(StudioId=studio_id)["Studio"]
+        except Exception as e:  # not-found, wrong region, or missing permission
+            raise RuntimeError(
+                f"EMR Studio preflight failed: could not describe Studio "
+                f"'{studio_id}' in region '{settings.AWS_REGION}'. Verify "
+                f"EMR_STUDIO_ID is correct and the Studio lives in this region. "
+                f"({e})"
+            ) from e
+        auth_mode = studio.get("AuthMode")
+        if auth_mode != "IAM":
+            raise RuntimeError(
+                f"EMR Studio '{studio_id}' is in {auth_mode or 'unknown'} auth "
+                "mode, but EMR_AUTH_MODE=IAM requires an IAM-auth-mode Studio: "
+                "CreateStudioPresignedUrl is only valid for IAM Studios (against "
+                "an SSO Studio it fails with 'HashCsrf is null or empty'). Point "
+                "EMR_STUDIO_ID at the IAM-mode Studio (the emr-studio module's "
+                "studio_id output); auth mode is immutable, so an SSO Studio must "
+                "be recreated as IAM."
+            )
+        _verified_iam_studio_ids.add(studio_id)
 
 
 notebook_service = NotebookService()
