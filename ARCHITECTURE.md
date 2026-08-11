@@ -218,6 +218,76 @@ Single DynamoDB table with GSIs and TTL. Repositories under
 services never construct raw items. TTL is used for run-token expiry and
 other short-lived records.
 
+### 3.9 Tenant lifecycle
+
+A tenant is a **control-plane record first, dataplane infrastructure
+second**, and the two are decoupled by an event. §3.7 covers the emit
+side; this expands the full create → provision → active → suspend flow.
+
+**Design principle — the event triggers, but the reconcile is
+declarative.** The `TenantProvisioningRequested` event is only a *nudge*;
+the dataplane pipeline's source of truth is the platform API's tenant
+list, which it reads and `terraform apply`s idempotently. A lost event
+just delays provisioning — the next run (scheduled or manual) heals it.
+
+```
+CONTROL PLANE (tmt)                         DATAPLANE (tmt-dataplane)
+──────────────────                          ─────────────────────────
+PlatformAdmin
+  POST /tenants  (routers/tenants.py)
+    │ validate tenantId slug (≤30 chars)
+    │ 409 if exists
+    │ write Tenant record (status=active)
+    ▼
+  tenant_provisioning_service.provision()
+    ├─ MOCK: fill mock IDs, S3 prefix,
+    │        provisioningStatus=active ──► done (no AWS)
+    └─ PROD: provisioningStatus=pending
+             emit TenantProvisioningRequested ─► EventBridge bus
+                                                    │
+                                                    ▼  detail-type match
+                                                 CodeBuild reconcile
+                                                 (account-baseline rule)
+                                                    │
+             GET /tenants?pageSize=500 ◄───────────┤ read DESIRED state
+                                                    │ (not the event payload)
+                                                    ▼
+                                                 terraform apply
+                                                 module.tenant (for_each)
+                                                    · EMR Serverless app
+                                                    · exec role …-tenant-{id}-exec
+                                                    · per-tenant KMS key
+                                                    · S3 prefix marker
+                                                    │
+    Tenant → active ◄── PUT /tenants/{id}/ ◄────────┘ write-back real IDs
+    (job submission now allowed)  provisioning       (emr/role/kms/s3)
+```
+
+**States** (`Tenant.provisioningStatus`, `Tenant.status`):
+
+| Transition | Trigger | Effect |
+|---|---|---|
+| create → `pending` | `POST /tenants` (prod mode) | Record exists; **job submission rejected** (`TenantNotProvisionedError`) |
+| create → `active` | `POST /tenants` (mock mode) | Self-provisioned with mock IDs; no AWS |
+| `pending` → `active` | `PUT /tenants/{id}/provisioning` write-back | Real EMR/role/KMS/S3 IDs recorded; jobs allowed |
+| `active` → `suspended` | `POST /tenants/{id}/suspend` | **Dataplane untouched** — jobs blocked at the API layer, resources persist |
+| `suspended` → `active` | `POST /tenants/{id}/reactivate` | Unblocks; no re-provisioning needed |
+
+**Why `tenantId` is chosen, never generated** — the same slug appears in
+three independent places that must agree: the Entra group names
+(`myapp-{tenantId}-{role}`), the S3 prefix, and the dataplane execution
+role name (`ml-platform-tenant-{tenantId}-exec`). The ≤30-char cap
+(`_TENANT_ID_RE` in `routers/tenants.py`) exists so that role name stays
+under IAM's 64-char limit — a longer slug would validate here and then
+fail `terraform apply` in the pipeline.
+
+**Write-back is idempotent and self-healing** — `provision-tenants.sh`
+re-PUTs any tenant whose stored record doesn't match the Terraform
+outputs, not just `pending` ones (so a field added later — e.g. `kmsKeyArn`
+with the account split — is backfilled on the next reconcile). See
+`tmt-dataplane/scripts/provision-tenants.sh` and `modules/tenant`. EMR
+Studio is **platform-global**, not part of this per-tenant loop (§3.6).
+
 ## 4. Production topology
 
 Production runs across **two AWS accounts**:
