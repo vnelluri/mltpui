@@ -25,13 +25,14 @@ sign-in.**
 
 | Side | Owner | Artifact |
 |---|---|---|
-| IAM SAML provider (AWS) | us (Terraform) or IAM admin | `aws_iam_saml_provider` from Entra metadata |
-| Tier roles `…-emr-studio-basic` / `-intermediate` (AWS) | us (Terraform) | trust the SAML provider via `AssumeRoleWithSAML` |
+| IAM SAML provider (AWS) | **IAM admin** (out-of-band) | `aws_iam_saml_provider` from Entra metadata — gives us its ARN |
+| Tier roles `…-emr-studio-basic` / `-intermediate` (AWS) | us (Terraform) | trust the SAML provider ARN via `AssumeRoleWithSAML` |
 | Entra enterprise app (SAML) | **Entra admin** | claims + group assignment + relay state |
 
-Terraform (`tmt-dataplane/modules/emr-studio`) already creates the tier roles
-and, given the metadata, the SAML provider. The **Entra-side app is the manual
-part** described below.
+Our Terraform (`tmt-dataplane/modules/emr-studio`) **never creates the SAML
+provider** — it has no `iam:CreateSAMLProvider` permission (a permissions
+boundary may deny it, and it's a sensitive account-global identity resource).
+The IAM admin creates it and we reference its ARN.
 
 ## Bootstrap ordering (resolves the chicken-and-egg)
 
@@ -40,14 +41,16 @@ role ARNs. Do it in this order:
 
 1. **Entra admin** creates the enterprise app and exports its **federation
    metadata XML** (App → Single sign-on → SAML → "Federation Metadata XML").
-2. **We** apply the module with `emr_studio_saml_metadata_document` = that XML
-   (or the IAM admin creates the SAML provider and gives us
-   `emr_studio_saml_provider_arn`). Terraform emits three root outputs:
+2. **IAM admin** creates the IAM SAML provider from that metadata
+   (`aws iam create-saml-provider --name ml-platform-emr-studio-entra
+   --saml-metadata-document file://metadata.xml`) and gives us its **ARN**.
+3. **We** apply the module with `emr_studio_saml_provider_arn` = that ARN.
+   Terraform emits three root outputs:
    - `emr_studio_url` — the Studio access URL
-   - `emr_studio_saml_provider_arn`
+   - `emr_studio_saml_provider_arn` (echoes the input, for the packet below)
    - `emr_studio_tier_role_arns` = `{ basic = <arn>, intermediate = <arn> }`
-3. **We hand those three back to the Entra admin** to finish the app (below).
-4. **We** set the backend's `EMR_STUDIO_URL` = `emr_studio_url`.
+4. **We hand those back to the Entra admin** to finish the app (below), and set
+   the backend's `EMR_STUDIO_URL` = `emr_studio_url`.
 
 ## Entra enterprise app — exact configuration
 
@@ -111,9 +114,9 @@ Role claim value, intermediate tier:  <intermediate-role-arn>,<saml-provider-arn
 
 ## Notes / caveats
 
-- **Prefer an admin-created SAML provider referenced by ARN** if the CI/CD role
-  can't `iam:CreateSAMLProvider` (the permissions boundary may deny it — the
-  same class of block that pushed us off SSO). Pass
-  `emr_studio_saml_provider_arn` instead of the metadata document.
+- **The IAM admin owns the SAML provider.** Our reconcile pipeline has no
+  `iam:*SAMLProvider` permission by design — the same class of block that pushed
+  us off SSO (`sso:CreateApplication`) could deny `iam:CreateSAMLProvider`, and
+  it's a sensitive account-global resource. We only reference its ARN.
 - The Studio is **platform-global**; tiers are platform-wide within a user's
   tier (no per-tenant S3 scoping yet — a later release).

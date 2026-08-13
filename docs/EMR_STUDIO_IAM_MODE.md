@@ -109,8 +109,9 @@ Studio id nor any tier role to assume. The prod-config guard now simply requires
 `auth_mode = "IAM"` creates the Studio, the two security groups, the service
 role, and the two per-tier roles (`…-emr-studio-basic` / `-intermediate`) —
 now trusted by the **SAML provider** for `sts:AssumeRoleWithSAML` (not the
-backend). Supply the IdP via `saml_provider_arn` (existing) or
-`saml_metadata_document` (creates `aws_iam_saml_provider`). Root outputs:
+backend). The SAML provider is created out-of-band by an IAM admin and passed in
+by ARN (`saml_provider_arn`); the module never calls `iam:CreateSAMLProvider`.
+Root outputs:
 `emr_studio_url` (→ backend `EMR_STUDIO_URL`), `emr_studio_saml_provider_arn`
 and `emr_studio_tier_role_arns` (→ the Entra "Role" claim). The backend module
 (`backend/iac`) has dropped the old `emr_studio_id` / tier-role variables and
@@ -129,7 +130,6 @@ immutable), so switching an existing Studio means replacing it.
   must be configured by the Entra admin: see
   [EMR_STUDIO_FEDERATION_REQUEST.md](EMR_STUDIO_FEDERATION_REQUEST.md). The
   AWS-side module (SAML provider + tier roles) is done.
-- **SAML provider creation vs reference** — if the CI/CD role can't
-  `iam:CreateSAMLProvider` (permissions boundary), have an admin create it and
-  pass `saml_provider_arn` instead of the metadata document.
+- **IAM admin creates the SAML provider** out-of-band; we reference its ARN
+  (`saml_provider_arn`). The stack has no `iam:CreateSAMLProvider` by design.
 - **MRM sign-off** on the federated-session attribution model.
