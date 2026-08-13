@@ -175,16 +175,20 @@ them:
 **How the Studio connects to a tenant's EMR Serverless application**
 (all defined in `tmt-dataplane/modules/emr-studio/main.tf`):
 
-1. **Sign-in** — the browser follows the backend deep link and
-   authenticates through IAM Identity Center (Entra federated, groups
-   SCIM-synced). The user's group must appear in the module's
-   `session_mappings` input, which assigns a session-policy tier; without
-   a mapping, no Studio session can start.
-2. **Session identity** — every federated session assumes the shared
-   **user role**, further restricted by the mapped session policy:
+1. **Sign-in** — the browser follows the backend deep link and AWS's
+   hosted flow authenticates the user. **IAM mode (default):** the access
+   URL redirects to IAM sign-in — or, with IAM federation to Entra, to a
+   SAML sign-in that lands the user in a per-tier role
+   (`sts:AssumeRoleWithSAML` via the admin-created SAML provider).
+   **SSO mode:** IAM Identity Center (Entra federated, groups SCIM-synced);
+   the user's group must appear in the module's `session_mappings` input —
+   without a mapping, no Studio session can start.
+2. **Session identity** — the tier bounds what the session can do:
    `basic` can browse EMR Serverless applications and attach a Workspace
    to one; `intermediate` can additionally start/stop applications and
-   start/cancel job runs.
+   start/cancel job runs. In IAM mode the tier is the per-tier role the
+   user federated into (`…-emr-studio-basic` / `-intermediate`); in SSO
+   mode it is a session policy narrowing the shared user role.
 3. **Attach** — inside the Studio the user attaches their Workspace to an
    EMR Serverless application as its compute engine. The applications
    offered are the **per-tenant applications created by `tmt-dataplane`**
@@ -311,9 +315,11 @@ Production runs across **two AWS accounts**:
 └─────────────────────────────────────────┘   └─────────────────────────────────────────┘
     ▲ Cognito (SAML ← Azure AD)         backend → dataplane (cross-account):
                                         PutEvents to the bus, AssumeRole the runtime
-                                        role (+tenantId tag) and the Studio tier roles,
-                                        and S3/KMS on the artifacts bucket by resource
-                                        policy. The artifacts bucket, provisioning bus,
+                                        role (+tenantId tag), and S3/KMS on the
+                                        artifacts bucket by resource policy. (The
+                                        Studio tier roles are assumed by USERS via
+                                        SAML federation, never by the backend.)
+                                        The artifacts bucket, provisioning bus,
                                         and per-job secrets all live in the DATAPLANE
                                         account; the backend reaches them cross-account.
 ```
@@ -357,18 +363,22 @@ belongs:
   (artifacts bucket, provisioning bus, the `dataplane-runtime` role). The
   Studio's applied-once-global lifecycle fits `account-baseline` exactly.
 - All its resources are dataplane-account (Studio, tier roles, SGs), next to
-  the EMR Serverless apps they attach to, and every input is already a
-  `tmt-dataplane` variable: `backend_task_role_arn` (→ `backend_principal_arns`,
-  the tier-role trust), `subnet_ids`, `vpc_id`, `artifacts_bucket`
-  (→ `default_s3_location`; the artifacts bucket is a **dataplane** resource
-  created by `account-baseline`, reached by the backend cross-account), and the
-  `…-tenant-*-exec` pattern (→ the intermediate tier's `PassRole`).
-- Its outputs (`studio_id`, `tier_role_arns`) wire into the backend exactly
-  like `runtime_role_arn` / `event_bus_arn` already do.
+  the EMR Serverless apps they attach to, and its inputs are dataplane-side
+  values: `saml_provider_arn` (the admin-created SAML provider the tier roles
+  trust for `sts:AssumeRoleWithSAML`), `subnet_ids`, `vpc_id`,
+  `artifacts_bucket` (→ `default_s3_location`; the artifacts bucket is a
+  **dataplane** resource created by `account-baseline`, reached by the backend
+  cross-account), and the `…-tenant-*-exec` pattern (→ the intermediate tier's
+  `PassRole`).
+- Its `emr_studio_url` output wires into the backend (operator-written SSM
+  `/ml-platform/emr/studio-url` → `EMR_STUDIO_URL`); `emr_studio_tier_role_arns`
+  and `emr_studio_saml_provider_arn` feed the Entra "Role" claim — not the
+  backend.
 
-The control-plane backend **consumes** the Studio (assumes the tier roles and
-presigns) but never applies it. In IAM mode it calls `CreateStudioPresignedUrl`
-at launch (§3.6); in SSO mode it deep-links the static URL. Costs borne on the
+The control-plane backend **consumes** the Studio (deep-links its access URL,
+§3.6) but never applies it — in both auth modes AWS's hosted sign-in flow
+authenticates the user, and the backend makes no EMR Studio API call and
+assumes no Studio role. Costs borne on the
 `tmt-dataplane` side: the reconcile CodeBuild role gained EMR-Studio +
 studio-IAM-role + SG create permissions, and the Studio's roles get KMS use on
 the artifacts CMK. Historically the module lived here and the backend pipeline

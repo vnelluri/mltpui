@@ -6,21 +6,24 @@ EMR Studio module README (in the companion `tmt-dataplane` repo,
 `modules/emr-studio`). For the full IAM-mode design + trade-offs see
 [EMR_STUDIO_IAM_MODE.md](EMR_STUDIO_IAM_MODE.md).
 
-> **Two auth modes.** The platform **defaults to IAM mode** (no Identity
-> Center): at launch the backend assumes a per-tier IAM role and calls
-> `CreateStudioPresignedUrl`. **SSO mode** (IAM Identity Center) is the opt-in
-> alternative (`EMR_AUTH_MODE=SSO` + module `auth_mode = "SSO"`): the backend
-> deep-links a static URL and Identity Center authenticates the user. This doc
-> leads with IAM; SSO differences are called out inline.
+> **Two auth modes, one launch path.** The platform **defaults to IAM mode**
+> (no Identity Center); **SSO mode** (IAM Identity Center) is the opt-in
+> alternative (`EMR_AUTH_MODE=SSO` + module `auth_mode = "SSO"`). The mode is a
+> property of how the *Studio* authenticates users, **not a backend code
+> branch**: in both modes the backend returns the Studio's static **access URL**
+> (`EMR_STUDIO_URL`, read from SSM) and AWS's hosted sign-in flow authenticates
+> the user. The backend never calls the EMR Studio API —
+> `CreateStudioPresignedUrl` is not in the boto3 SDK; see
+> [EMR_STUDIO_IAM_MODE.md](EMR_STUDIO_IAM_MODE.md).
 
 > **Where the notebook actually runs: the dataplane account, always.** The EMR
 > Studio, its Workspaces, and the EMR Serverless compute all live in the
 > dataplane account. What differs by mode is how the user gets *in*:
-> - **IAM (default):** at launch the backend makes a cross-account call — assume
->   a dataplane tier role, `CreateStudioPresignedUrl` — and returns a short-lived
->   URL the user opens straight into the dataplane Studio.
-> - **SSO:** the backend hands back a static URL it read from SSM; Identity
->   Center authenticates the user when they open it (no API call at launch).
+> - **IAM (default):** the access URL redirects to IAM sign-in — or, with IAM
+>   federation to Entra, to the IdP — and the user lands in the Studio as their
+>   own federated tier-role session.
+> - **SSO:** the access URL redirects through IAM Identity Center, which
+>   supplies the user's Entra identity.
 >
 > Either way, once the user is in, the notebook session and its attach to EMR
 > Serverless are same-account inside the dataplane. Training-**job** submission
@@ -30,24 +33,27 @@ EMR Studio module README (in the companion `tmt-dataplane` repo,
 ## 1. Runtime flow (a user clicks "Launch EMR Studio")
 
 ```
-Browser (NotebookPage)        Backend (FastAPI)                      Dataplane account
-──────────────────────        ─────────────────                      ─────────────────
+Browser (NotebookPage)        Backend (FastAPI)                Dataplane account
+──────────────────────        ─────────────────                ─────────────────
 POST /notebooks/launch ─────► notebooks.py router
   { sessionType:'emr_studio',  │ require_role(TenantAdmin | DataScientist)
     tenantId, usecaseId? }     │ enforce_tenant_access()
-                               │ notebook_service.launch(role)
-                               │  IAM: tier = basic | intermediate (from role)
-                               │       sts:AssumeRole tier-role
-                               │        RoleSessionName=<stable user id>, tags ─► …-emr-studio-{tier}
-                               │       emr.CreateStudioPresignedUrl(StudioId) ──► EMR Studio (IAM)
-                               │  SSO: return settings.EMR_STUDIO_URL (static)
+                               │ notebook_service.launch()
+                               │   → settings.EMR_STUDIO_URL (no AWS call)
                                │ NotebookSession → DynamoDB
                                │ audit_service.record('notebook.launch')
-  ◄──────────────────────────── 201 { presignedUrl, urlExpiresAt }
-window.open(presignedUrl) ───────────────────────────────────────────────► Workspace (Jupyter)
-                                                                            │ attach to a tenant's
-                                                                            ▼ EMR Serverless app
-                                                                          Compute (from tmt-dataplane)
+  ◄──────────────────────────── 201 { presignedUrl = access URL, urlExpiresAt }
+window.open(access URL) ─────────────────────────────────────► Studio access URL
+                                                                │ hosted sign-in:
+                                                                │  IAM / IAM-federation (IAM mode)
+                                                                │  Identity Center (SSO mode)
+                                                                │ then CreateStudioPresignedUrl
+                                                                │ (the user's own permission)
+                                                                ▼
+                                                              Workspace (Jupyter)
+                                                                │ attach to a tenant's
+                                                                ▼ EMR Serverless app
+                                                              Compute (from tmt-dataplane)
 ```
 
 Step by step:
@@ -64,31 +70,31 @@ Step by step:
    service (passing the user's active role), persists a `NotebookSession` row,
    and writes a `notebook.launch` audit event. Session URLs are returned once
    and never re-read from storage — past sessions in the UI are metadata only
-   ("Relaunch to open"). `urlExpiresAt` is **~5 min in IAM mode** (the presigned
-   redemption window) and 1 hour in SSO mode.
+   ("Relaunch to open"). The `presignedUrl` field name is historical: it carries
+   the static access URL, which does not expire — `urlExpiresAt` is a nominal
+   1-hour stamp; sign-in happens when the user opens the URL.
 
 3. **Service** — `backend/app/services/notebook_service.py`
-   `launch_emr_studio(tenant_id, user_id, role)` branches on `EMR_AUTH_MODE`:
-   - **IAM (default):** map role → tier (`DataScientist → basic`;
-     `TenantAdmin`/`PlatformAdmin → intermediate`), `sts:AssumeRole` that tier
-     role with a **stable `RoleSessionName` = the user's id** (plus `user` /
-     `tenantId` session tags), then `emr.create_studio_presigned_url(StudioId=…)`
-     and return `AuthorizedUrl`. Mirrors the SageMaker presign path
-     (`launch_sagemaker_studio`, `sagemaker:CreatePresignedDomainUrl`).
-   - **SSO:** return `settings.EMR_STUDIO_URL` (static), or raise if unset. No
-     AWS call.
-   - Either mode: if `usecaseId` was passed, append `#collab=usecase:<id>` — a
-     URL *fragment*, so it can never invalidate a presigned signature — which
-     the Studio-side bootstrap uses to land collaborators in a shared workspace.
-     With `EMR_MOCK_MODE=true` (local dev) a fake
-     `https://mock-emr.local/session/<uuid>` is returned before any of this.
+   `launch_emr_studio()` returns `settings.EMR_STUDIO_URL` (or raises with a
+   pointer to this setup if unset). It does **not** branch on `EMR_AUTH_MODE`
+   and makes **no AWS call** — the auth mode is a property of the Studio, not
+   of this code path.
+   - Either mode: if `usecaseId` was passed, `launch()` appends
+     `#collab=usecase:<id>` — a URL *fragment*, so it can never invalidate a
+     presigned signature — which the Studio-side bootstrap uses to land
+     collaborators in a shared workspace. With `EMR_MOCK_MODE=true` (local dev)
+     a fake `https://mock-emr.local/session/<uuid>` is returned before any of
+     this.
 
-4. **Sign-in** — the new tab hits the Studio:
-   - **IAM:** the presigned URL logs the user in as the **assumed tier-role
-     session** (`aws:userId` = `<tier-role-id>:<user-id>`). Per-user Workspace
-     ownership holds because EMR Studio tags each Workspace `creatorUserId =
-     ${aws:userId}` (see EMR_STUDIO_IAM_MODE.md). The URL must be opened within
-     the presigned window (~5 min).
+4. **Sign-in** — the new tab hits the Studio's access URL and AWS's hosted flow
+   authenticates the user, then calls `CreateStudioPresignedUrl` **under the
+   user's own identity** (their grant on the Studio ARN — not anything the
+   backend does):
+   - **IAM:** the access URL redirects to IAM sign-in — or, with IAM federation
+     to Entra, to a SAML sign-in that lands the user in a per-tier role via
+     `sts:AssumeRoleWithSAML`. Per-user Workspace ownership holds because EMR
+     Studio tags each Workspace `creatorUserId = ${aws:userId}` (see
+     EMR_STUDIO_IAM_MODE.md).
    - **SSO:** the URL redirects through IAM Identity Center (Entra-federated);
      EMR Studio looks for a **session mapping** for the user/group (**no mapping
      → no session**) and starts a federated session under the shared user role,
@@ -107,42 +113,32 @@ attach as platform-wide within a tier until per-tenant Studios ship.
 
 ## 2. How the backend reaches the Studio (config)
 
-### IAM mode (default)
-
-The backend needs the Studio id and the two tier role ARNs, and permission to
-assume them. All come from the `tmt-dataplane` root outputs (wired in like
-`runtime_role_arn` already is):
-
-| Backend setting | Value (from `tmt-dataplane` outputs) |
-|---|---|
-| `EMR_AUTH_MODE` | `IAM` |
-| `EMR_STUDIO_ID` | `emr_studio_id` (the module's `studio_id`) |
-| `EMR_STUDIO_BASIC_ROLE_ARN` | `emr_studio_tier_role_arns["basic"]` |
-| `EMR_STUDIO_INTERMEDIATE_ROLE_ARN` | `emr_studio_tier_role_arns["intermediate"]` |
-| `backend/iac` `emr_studio_tier_role_arns` | both ARNs — adds the task role's `sts:AssumeRole` grant |
-
-There is **no `EMR_STUDIO_URL` and no SSM URL parameter** in IAM mode — the URL
-is minted per launch.
-
-### SSO mode (alternative)
-
-The static Studio URL reaches the app via SSM:
+**Both modes, one wire** — the static Studio access URL reaches the app via
+SSM:
 
 ```
 tmt-dataplane emr-studio module        SSM (control plane)      Backend task
 ──────────────────────────────         ───────────────────      ────────────
 aws_emr_studio.this.url ─────────────► /ml-platform/emr/         ECS injects as
-  (module `url` output)                 studio-url ────────────► EMR_STUDIO_URL env var
+  (module `url` output; root            studio-url ────────────► EMR_STUDIO_URL env var
+   output `emr_studio_url`)
 ```
 
-The operator writes the module's `url` output to `/ml-platform/emr/studio-url`;
-`backend/iac/main.tf` injects that SSM param as `EMR_STUDIO_URL`;
-`notebook_service.launch_emr_studio()` returns it. `backend/app/config.py`
-declares `EMR_STUDIO_URL: Optional[str]` and raises a clear error if it's unset
-while `EMR_AUTH_MODE=SSO`.
+The operator writes the module's `url` output (root output `emr_studio_url`)
+to `/ml-platform/emr/studio-url`; `backend/iac/main.tf` injects that SSM param
+as `EMR_STUDIO_URL`; `notebook_service.launch_emr_studio()` returns it.
+`backend/app/config.py` declares `EMR_STUDIO_URL: Optional[str]`, and the prod
+boot-guard **refuses to start** if it is unset (both modes) — a missing URL
+fails at deploy time, not at click time.
 
-Local dev needs neither: `backend/.env.example` leaves both blank and
-`EMR_MOCK_MODE` supplies mock session URLs.
+`EMR_AUTH_MODE` (`IAM` default / `SSO`) documents which way the Studio was
+provisioned; the launch path does not branch on it. The old IAM-mode settings
+(`EMR_STUDIO_ID`, `EMR_STUDIO_BASIC/INTERMEDIATE_ROLE_ARN`) and the
+`backend/iac` `emr_studio_tier_role_arns` variable are **gone** — the backend
+no longer presigns, so it needs neither the Studio id nor any role to assume.
+
+Local dev needs none of this: `backend/.env.example` leaves `EMR_STUDIO_URL`
+blank and `EMR_MOCK_MODE` supplies mock session URLs.
 
 ## 3. Compute access: attach vs. submit
 
@@ -160,10 +156,11 @@ the notebook attach same-account.
 Happens **entirely inside the dataplane account, in the user's browser
 session**; the backend is not involved after launch.
 
-- **Identity** — the Studio session is either the presigned **tier-role**
-  session (IAM mode) or the shared **user role** narrowed by a session policy
-  (SSO mode). Either way the role and the EMR Serverless apps live in the
-  dataplane account → a **same-account** attach, no cross-account STS.
+- **Identity** — the Studio session is the user's own federated **tier-role**
+  session (IAM mode — `sts:AssumeRoleWithSAML` via the Studio's SAML provider)
+  or the shared **user role** narrowed by a session policy (SSO mode). Either
+  way the role and the EMR Serverless apps live in the dataplane account → a
+  **same-account** attach, no cross-account STS.
 - **Attach** — the user picks an EMR Serverless application as the Workspace
   engine; the browse is `emr-serverless:ListApplications`/`GetApplication`. Apps
   offered are the per-tenant ones from `tmt-dataplane`.
@@ -189,7 +186,7 @@ resource tag and `iam:PassRole` limited to the tenant execution-role pattern
 |  | Path 1: notebook attach | Path 2: job submit |
 |---|---|---|
 | Driven by | user's browser (Studio) | backend (FastAPI) |
-| Identity | Studio tier-role / user-role session | control-plane task role → assumed dataplane runtime role |
+| Identity | user's own federated Studio session (tier role / user role) | control-plane task role → assumed dataplane runtime role |
 | Cross-account? | **No** — Studio co-located with apps | **Yes** — STS AssumeRole + `tenantId` ABAC tag |
 | Tenant isolation | **None** — any tier user can attach to any tenant's app | **Per-tenant** — ABAC tag + execution role + KMS |
 
@@ -198,10 +195,10 @@ This asymmetry is the documented known limitation (ARCHITECTURE.md §3.6): job
 in one tenant can attach a Workspace to another tenant's app. Per-tenant Studios
 are the deferred fix.
 
-> Note on the launch call itself: in **IAM mode** minting the URL *is* a
-> cross-account control→dataplane call (assume tier role + presign), unlike SSO
-> where launch just returns a static string. Either way it only mints access —
-> the notebook session and compute still run entirely in the dataplane.
+> Note on the launch call itself: in **neither mode** does launch touch AWS —
+> the backend returns the static access URL and sign-in happens later, in the
+> user's browser, under the user's own identity. Launch only points at access —
+> the notebook session and compute run entirely in the dataplane.
 
 ### Two dependencies this repo does not enforce
 
@@ -218,8 +215,9 @@ are the deferred fix.
 
 | Piece | Account | Notes |
 |---|---|---|
-| EMR Studio + tier roles + SGs (IAM mode) | **Dataplane** | Created by `tmt-dataplane/modules/emr-studio`, applied by `tmt-dataplane` (account-baseline), next to the EMR Serverless apps. In SSO mode this also includes the shared user role + session policies + session mappings. |
-| Backend Studio config | **Control plane** | IAM mode: `EMR_STUDIO_ID` + tier role ARNs (backend assumes them to presign). SSO mode: the SSM param `/ml-platform/emr/studio-url` the backend reads to deep-link. |
+| EMR Studio + tier roles + SGs (IAM mode) | **Dataplane** | Created by `tmt-dataplane/modules/emr-studio`, applied by `tmt-dataplane` (account-baseline), next to the EMR Serverless apps. The tier roles trust the SAML provider for `sts:AssumeRoleWithSAML`. In SSO mode this instead includes the shared user role + session policies + session mappings. |
+| SAML IAM identity provider (Entra federation) | **Dataplane** | **IAM mode only.** Created out-of-band by an IAM admin and passed to the module by ARN (`saml_provider_arn`); the module never calls `iam:CreateSAMLProvider`. Entra side: [EMR_STUDIO_FEDERATION_REQUEST.md](EMR_STUDIO_FEDERATION_REQUEST.md). |
+| Backend Studio config | **Control plane** | **Both modes:** the SSM param `/ml-platform/emr/studio-url` the backend reads to deep-link (`EMR_STUDIO_URL`), plus `EMR_AUTH_MODE` (documents the Studio's mode; no code branch). |
 | Artifacts bucket (Workspace storage) | **Dataplane** | Created by `account-baseline`; the backend reaches it cross-account. |
 | IAM Identity Center (Entra federation, SCIM) | **Org management / delegated admin** | **SSO mode only.** Org-level service; where Entra federation and `myapp-*` group sync live. Not used in IAM mode. |
 
@@ -230,13 +228,20 @@ collapse into one account.
 
 ### IAM mode (default)
 
+- **SAML provider created** by an IAM admin in the dataplane account (Entra
+  federation metadata) — referenced by ARN, never created by the stack.
 - **`tmt-dataplane/modules/emr-studio` applied** with `auth_mode = "IAM"` and
-  `backend_principal_arns = [<backend task role ARN>]` (the tier roles trust it),
-  in the dataplane account.
-- **Backend configured** — `EMR_AUTH_MODE=IAM`, `EMR_STUDIO_ID`, both tier role
-  ARNs, and `backend/iac` `emr_studio_tier_role_arns` (for the `sts:AssumeRole`
-  grant). The prod boot-guard refuses to start if `EMR_AUTH_MODE=IAM` and any of
-  these are missing.
+  `saml_provider_arn = <that ARN>` (the tier roles trust it for
+  `sts:AssumeRoleWithSAML`), in the dataplane account.
+- **Entra-side SAML app configured** (enterprise app, claims, group→role
+  mapping to the tier roles) per
+  [EMR_STUDIO_FEDERATION_REQUEST.md](EMR_STUDIO_FEDERATION_REQUEST.md). This is
+  what "assigns" users: the tier roles carry
+  `elasticmapreduce:CreateStudioPresignedUrl` on the Studio ARN, which the
+  hosted sign-in flow needs to complete.
+- **SSM `/ml-platform/emr/studio-url` written** from the module's `url` output
+  (root `emr_studio_url`), and `EMR_AUTH_MODE=IAM` on the backend. The prod
+  boot-guard refuses to start if `EMR_STUDIO_URL` is unset (both modes).
 - **At least one tenant provisioned** via the `tmt-dataplane` reconcile pipeline
   (with its EMR Serverless app's **interactive endpoint enabled**) — otherwise
   there is nothing to attach a Workspace to.
@@ -247,6 +252,6 @@ collapse into one account.
   SCIM-synced (org/account-level config the module cannot create).
 - **`auth_mode = "SSO"` and `session_mappings` populated** — keys must match
   Identity Center identity names exactly. Empty map = nobody can start a session.
-- **SSM `/ml-platform/emr/studio-url` written** from the module's `url` output,
-  and `EMR_AUTH_MODE=SSO` on the backend.
+- **SSM `/ml-platform/emr/studio-url` written** from the module's `url` output
+  (root `emr_studio_url`), and `EMR_AUTH_MODE=SSO` on the backend.
 - Same tenant/interactive-endpoint prerequisite as above.
