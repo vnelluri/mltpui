@@ -3,8 +3,7 @@
 An alternative to the SSO/Identity Center design in
 [EMR_STUDIO_LAUNCH.md](EMR_STUDIO_LAUNCH.md) and
 [IDENTITY_CENTER_ADMIN_REQUEST.md](IDENTITY_CENTER_ADMIN_REQUEST.md). IAM mode
-removes IAM Identity Center from the notebook path entirely, trading a
-cross-org/cross-team coordination problem for self-contained backend code.
+removes IAM Identity Center from the notebook path entirely.
 
 ## Why
 
@@ -14,125 +13,121 @@ Studio as a managed application in IAM Identity Center — it calls
 CI/CD role's permissions boundary (`CSEStandardPermissionsBoundary`) denies
 those, so the SSO pipeline fails. IAM mode's `CreateStudio` makes **no `sso:`
 calls**, so it doesn't hit that wall — and it needs no Entra↔Identity Center
-federation, no SCIM group sync, no session mappings, and no region-instance
-coupling.
+federation through Identity Center, no SCIM group sync, and no session mappings.
 
-The cost: the backend must call the EMR Studio API at launch time (it made none
-before), and tiering moves from Identity Center session mappings into backend
-code. Both are small and fully under our control.
+## How access actually works (important — read before implementing)
 
-## How it works
+**The backend does not presign EMR Studio.** In both auth modes it returns the
+Studio's static **access URL** (`EMR_STUDIO_URL`) and lets AWS's hosted sign-in
+flow authenticate the user and mint the presigned URL server-side.
+
+Why not presign from the backend? The `CreateStudioPresignedUrl` operation —
+though it exists as an AWS service API and an IAM action — is **not part of the
+boto3/botocore SDK** (verified against the pinned `botocore==1.35.90` *and* the
+latest release: the EMR client has `describe_studio`, `create_studio`, session
+mappings, etc., but **no `create_studio_presigned_url`** and no presigned Studio
+operation at all). It is invoked by the AWS console / hosted Studio layer, not
+by third-party code. Attempting to call it from the backend either raises
+`AttributeError` (stock SDK) or requires injecting an unpublished operation
+model — brittle and unsupported. So we don't.
 
 ```
-Browser            Backend (control plane)                 Dataplane account
-───────            ───────────────────────                 ─────────────────
-POST /notebooks/launch ─► notebook_service.launch(role)
-                          │ tier = basic | intermediate  (from user's role)
-                          │ sts:AssumeRole tier-role
-                          │   RoleSessionName = <stable user id>
-                          │   Tags: user, tenantId ──────► …-emr-studio-{tier} role
-                          │ emr.CreateStudioPresignedUrl(StudioId) ─► EMR Studio (IAM)
-◄── 201 { presignedUrl } ─┘   AuthorizedUrl
-window.open(AuthorizedUrl) ───────────────────────────────► Workspace (Jupyter)
+Browser                         Backend (control plane)        AWS-hosted EMR Studio
+───────                         ───────────────────────        ─────────────────────
+POST /notebooks/launch ───────► notebook_service.launch()
+                                │ (no AWS API call)
+◄── 201 { url = EMR_STUDIO_URL }┘
+window.open(EMR_STUDIO_URL) ──────────────────────────────────► access URL
+                                                                 │ redirects to
+                                                                 │ IAM sign-in / your
+                                                                 │ IdP (IAM federation)
+      user authenticates ◄───────────────────────────────────────┘
+                                                                 hosted flow calls
+                                                                 CreateStudioPresignedUrl
+                                                                 (authorized by the user's
+                                                                  IAM permission) ─► Workspace
 ```
 
-Mirrors the existing SageMaker presign path (`notebook_service.launch_sagemaker_studio`,
-`sagemaker:CreatePresignedDomainUrl`). The `NotebookSession` model already
-carries `urlExpiresAt` for short-lived URLs, and the `#collab=usecase:<id>`
-fragment still works (a fragment can't invalidate a presigned URL).
+## Assigning a user (IAM mode) = an IAM grant
 
-## Per-user identity (verified against AWS docs)
+There are **no session mappings** in IAM mode. You "assign" a user by granting
+their IAM identity `elasticmapreduce:CreateStudioPresignedUrl` **on the Studio's
+ARN** (optionally narrowed by ABAC tags or `aws:SourceIdentity` for federation):
 
-This is the crux — IAM mode **does** give per-user Workspace ownership, via a
-documented mechanism:
-
-- EMR Studio tags every Workspace with **`creatorUserId` = `${aws:userId}`**
-  ([Set ownership for Workspace collaboration](https://docs.aws.amazon.com/emr/latest/ManagementGuide/emr-studio-user-permissions.html)).
-- For an assumed-role session, `aws:userId` = `<role-unique-id>:<RoleSessionName>`.
-  So two people assuming the **same** tier role get **different** `aws:userId`
-  values (different session names) → different `creatorUserId` → distinct
-  ownership. The tier roles scope the collaboration-management actions with
-  `creatorUserId = ${aws:userId}`, so a user can only manage the Workspaces
-  they created.
-
-**Hard requirement this imposes:** the backend must assume the tier role with a
-**stable, per-user `RoleSessionName`** (the Cognito `sub`/user id) — never a
-random value — or a user would get a new `creatorUserId` each login and lose
-ownership of their prior Workspaces. `notebook_service` uses the user id
-(sanitized to the STS charset, ≤64 chars).
-
-### What is weaker than SSO
-Workspace **visibility** is shared — *"By default, a Workspace is shared and can
-be seen by all Studio users"* — but that is true in SSO mode too, so it is not a
-regression. What IAM mode gives: per-user **ownership**, **collaboration
-control**, and **attribution**; what it doesn't add: per-user visibility
-isolation (neither mode does without extra tag controls).
-
-### Attribution for MRM/governance
-- "Who launched a session" already lives in the app's own audit log
-  (`notebook.launch` with `userId`) — mode-independent, the governance-grade
-  record.
-- In-Studio AWS API calls are attributed via `RoleSessionName` + the `user` /
-  `tenantId` session tags in CloudTrail.
-- The one thing SSO does natively that IAM mode approximates: a
-  cryptographically distinct Studio identity per person. **Confirm this level of
-  attribution satisfies MRM before adopting.**
-
-## Terraform (`tmt-dataplane/modules/emr-studio`)
-
-`auth_mode = "IAM"` (now the module default — set `"SSO"` for the Identity
-Center path):
-
-- **Creates** the Studio with `auth_mode = "IAM"` (no `user_role`), the two
-  security groups, the service role, and **two assumable tier roles**
-  (`…-emr-studio-basic`, `…-emr-studio-intermediate`) trusted by
-  `backend_principal_arns` for `sts:AssumeRole`/`sts:TagSession`. Each tier role
-  carries: `CreateStudioPresignedUrl`, Workspace lifecycle, creator-scoped
-  collaboration, EMR Serverless browse/attach (intermediate adds application
-  lifecycle), Workspace-bucket S3, and `iam:PassRole` for the service role
-  (intermediate also for the job runtime role).
-- **Skips** the SSO-only `user_role`, session policies, and session mappings.
-- **Outputs** `tier_role_arns` (basic/intermediate → ARN) and `auth_mode`.
-
-```hcl
-module "emr_studio" {
-  source                 = "./modules/emr-studio"
-  name_prefix            = "ml-platform"
-  vpc_id                 = var.vpc_id
-  subnet_ids             = var.private_subnet_ids
-  default_s3_location    = "s3://ml-platform-artifacts-prod/emr-studio-workspaces"
-  auth_mode              = "IAM"
-  backend_principal_arns = [var.backend_task_role_arn]
-  emr_serverless_runtime_role_arn_pattern = var.tenant_execution_role_arn_pattern
+```json
+{
+  "Effect": "Allow",
+  "Action": ["elasticmapreduce:CreateStudioPresignedUrl"],
+  "Resource": ["arn:aws:elasticmapreduce:<region>:<account>:studio/<studio-id>"]
 }
 ```
 
-`backend/iac` gets the tier-role ARNs via `emr_studio_tier_role_arns`, which adds
-an `sts:AssumeRole`/`TagSession` grant on them to the task role.
+Removing a user = removing that grant. Tiering (`basic` / `intermediate`) is
+expressed by *which* EMR-Studio permissions the user's IAM identity carries —
+the same example policies AWS documents — not by anything the backend does.
+
+## Per-user identity
+
+Per-user Workspace ownership still holds, but the identity comes from **the
+user's own federated session**, not the app:
+
+- The user reaches the Studio through the access URL and authenticates as
+  themselves (IAM user, or — for a workforce on Entra — via **IAM federation**:
+  the access URL redirects to Entra SAML and the user assumes an IAM role with
+  `aws:SourceIdentity` set to their identity).
+- EMR Studio tags every Workspace with `creatorUserId = ${aws:userId}`, so each
+  federated user owns the Workspaces they create; the tier policies scope
+  collaboration with `creatorUserId = ${aws:userId}`.
+
+**Prerequisite this imposes:** for per-user identity, the EMR Studio must be set
+up for **IAM federation to Entra** (a SAML IAM identity provider + a role the
+Studio access URL federates into). This is IAM-native and does **not** involve
+Identity Center — but it is a real setup step, and it is what replaces the
+earlier (unbuildable) "backend assumes a tier role and presigns" design.
+
+### Attribution for MRM/governance
+- "Who launched a session" lives in the app's own audit log
+  (`notebook.launch` with `userId`) — mode-independent, the governance-grade
+  record.
+- In-Studio AWS API calls are attributed to the federated session (its
+  `aws:SourceIdentity` / role-session identity) in CloudTrail.
 
 ## Backend config
 
 | Setting | Value |
 |---|---|
-| `EMR_AUTH_MODE` | `IAM` |
-| `EMR_STUDIO_ID` | the IAM-mode Studio id (module `studio_id` output) |
-| `EMR_STUDIO_BASIC_ROLE_ARN` | `tier_role_arns["basic"]` |
-| `EMR_STUDIO_INTERMEDIATE_ROLE_ARN` | `tier_role_arns["intermediate"]` |
+| `EMR_AUTH_MODE` | `IAM` (documents the Studio's mode; the launch path does **not** branch on it) |
+| `EMR_STUDIO_URL` | the Studio's static **access URL** (`describe-studio` → `Url`, or the module's `url` output) |
 
-`EMR_STUDIO_URL` is unused in IAM mode. Role→tier mapping (in `notebook_service`):
-`DataScientist → basic`; `TenantAdmin` / `PlatformAdmin → intermediate` (the
-router already restricts launch to `TenantAdmin` / `DataScientist`).
+`EMR_STUDIO_ID` and the `EMR_STUDIO_BASIC/INTERMEDIATE_ROLE_ARN` tier-role
+settings were removed — the backend no longer presigns, so it needs neither the
+Studio id nor any tier role to assume. The prod-config guard now simply requires
+`EMR_STUDIO_URL` (both modes).
+
+## Terraform (`tmt-dataplane/modules/emr-studio`)
+
+`auth_mode = "IAM"` creates the Studio with `auth_mode = "IAM"`, the two
+security groups, and the service role.
+
+> **Pending module change (Option A):** the module still creates two assumable
+> **tier roles** (`…-emr-studio-basic` / `…-emr-studio-intermediate`) from the
+> old backend-presign design. Under Option A the backend never assumes them, so
+> they are dead and should be **removed**; the module should instead expose the
+> IAM-federation **user role** (trusted by the SAML IdP) that the Studio access
+> URL federates into. Until that change lands, the tier roles are harmless but
+> unused. The backend module (`backend/iac`) has already dropped
+> `emr_studio_id` / tier-role variables and the `sts:AssumeRole` grant on them.
 
 ## Switching between modes
 
-`auth_mode` and `EMR_AUTH_MODE` are toggles; **IAM is now the default**, so set
-both to `"SSO"` for the Identity Center path. The two modes are mutually
-exclusive per Studio (the resource's `auth_mode` is immutable), so switching an
-existing Studio means replacing it.
+`auth_mode` / `EMR_AUTH_MODE` describe how the Studio authenticates users; the
+backend behaves identically either way (deep-link `EMR_STUDIO_URL`). The two
+modes are mutually exclusive per Studio (the resource's `auth_mode` is
+immutable), so switching an existing Studio means replacing it.
 
 ## Open items
-- **MRM sign-off** on the attribution model above.
-- **Studio region** — presign happens in `AWS_REGION`; if the Studio lives in a
-  different region, that needs a region override (not yet parameterised).
-- **`emr_serverless_runtime_role_arn_pattern`** defaults to `*`; scope it to the
-  tenant execution-role pattern in production.
+- **EMR Studio IAM federation to Entra** — the SAML IdP + user role that gives
+  per-user identity. Prerequisite for Option A; not yet in the module.
+- **Module cleanup** — remove the unused tier roles; add the federation user
+  role (see "Pending module change" above).
+- **MRM sign-off** on the federated-session attribution model.

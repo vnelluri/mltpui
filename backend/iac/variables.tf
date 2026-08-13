@@ -97,34 +97,10 @@ variable "dataplane_runtime_role_arn" {
   default     = null
 }
 
-variable "emr_studio_tier_role_arns" {
-  description = "EMR Studio IAM auth mode: ARNs of the basic/intermediate tier roles (from the tmt-dataplane emr-studio module's tier_role_arns output) the backend may assume to presign Studio URLs. Empty for SSO mode."
-  type        = list(string)
-  default     = []
-}
-
 variable "emr_auth_mode" {
-  description = "EMR Studio auth mode the backend uses: \"IAM\" (default; presigns via the tier roles below — requires emr_studio_id + both tier role ARNs) or \"SSO\" (deep-links EMR_STUDIO_URL from SSM)."
+  description = "EMR Studio auth mode — a property of how the Studio is configured, not a backend code branch. The backend deep-links EMR_STUDIO_URL (from SSM) in both modes; AWS's hosted sign-in authenticates the user. \"IAM\" (default): IAM / IAM-federation sign-in (users need elasticmapreduce:CreateStudioPresignedUrl on the Studio ARN). \"SSO\": IAM Identity Center."
   type        = string
   default     = "IAM"
-}
-
-variable "emr_studio_id" {
-  description = "IAM mode: the EMR Studio id the backend presigns into (the tmt-dataplane emr-studio module's studio_id output). Unused in SSO mode."
-  type        = string
-  default     = ""
-}
-
-variable "emr_studio_basic_role_arn" {
-  description = "IAM mode: tier_role_arns[\"basic\"] from the tmt-dataplane emr-studio module. Unused in SSO mode."
-  type        = string
-  default     = ""
-}
-
-variable "emr_studio_intermediate_role_arn" {
-  description = "IAM mode: tier_role_arns[\"intermediate\"] from the tmt-dataplane emr-studio module. Unused in SSO mode."
-  type        = string
-  default     = ""
 }
 
 variable "provisioning_event_bus_arn" {

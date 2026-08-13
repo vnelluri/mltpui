@@ -103,16 +103,15 @@ class Settings(BaseSettings):
     # tenant-prefixed; per-tenant Studios are a later release.
     EMR_STUDIO_URL: Optional[str] = None
     EMR_MOCK_MODE: bool = True
-    # EMR Studio authentication mode. "IAM" (default): no Identity Center — the
-    # backend assumes a per-tier role (RoleSessionName = the user's stable id, so
-    # EMR Studio's per-user creatorUserId Workspace ownership holds) and calls
-    # CreateStudioPresignedUrl to deep-link the user in. "SSO": the backend
-    # deep-links the static EMR_STUDIO_URL and Identity Center supplies each
-    # user's Entra identity. See docs/EMR_STUDIO_IAM_MODE.md.
+    # EMR Studio authentication mode — a property of how the *Studio* is
+    # configured, NOT a code branch: the backend deep-links the static
+    # EMR_STUDIO_URL in both modes and AWS's hosted sign-in flow authenticates
+    # the user. "IAM" (default): the access URL redirects to IAM sign-in / your
+    # IdP (IAM federation); users need elasticmapreduce:CreateStudioPresignedUrl
+    # on the Studio ARN so the hosted flow can presign them in. "SSO": Identity
+    # Center supplies each user's Entra identity. See docs/EMR_STUDIO_IAM_MODE.md.
+    # (CreateStudioPresignedUrl is not in the boto3 SDK; the app never calls it.)
     EMR_AUTH_MODE: str = "IAM"
-    EMR_STUDIO_ID: Optional[str] = None  # IAM mode: the Studio to presign into
-    EMR_STUDIO_BASIC_ROLE_ARN: Optional[str] = None
-    EMR_STUDIO_INTERMEDIATE_ROLE_ARN: Optional[str] = None
 
     # ── SageMaker ───────────────────────────────────────────────────────────
     # Execution roles are per-tenant (Tenant.executionRoleArn) — there is
@@ -202,8 +201,9 @@ class Settings(BaseSettings):
     @field_validator("EMR_AUTH_MODE")
     @classmethod
     def _normalise_emr_auth_mode(cls, v: str) -> str:
-        # Uppercased so notebook_service's `== "IAM"` check can't be defeated by
-        # a lowercase env value silently falling back to the SSO path.
+        # Normalised for the iac/docs contract and any mode-specific reporting;
+        # the launch path no longer branches on it (both modes deep-link
+        # EMR_STUDIO_URL).
         value = (v or "IAM").strip().upper()
         if value not in {"SSO", "IAM"}:
             raise ValueError("EMR_AUTH_MODE must be 'SSO' or 'IAM'")
@@ -237,16 +237,14 @@ class Settings(BaseSettings):
         ):
             if getattr(self, flag):
                 problems.append(f"{flag} is true")
-        # IAM-mode notebooks need the Studio id + both tier role ARNs, or launch
-        # fails only when a user clicks — check at boot like the flags above.
-        if self.EMR_AUTH_MODE == "IAM":
-            if not self.EMR_STUDIO_ID:
-                problems.append("EMR_AUTH_MODE=IAM but EMR_STUDIO_ID is not set")
-            if not (self.EMR_STUDIO_BASIC_ROLE_ARN and self.EMR_STUDIO_INTERMEDIATE_ROLE_ARN):
-                problems.append(
-                    "EMR_AUTH_MODE=IAM but EMR_STUDIO_BASIC_ROLE_ARN / "
-                    "EMR_STUDIO_INTERMEDIATE_ROLE_ARN are not both set"
-                )
+        # Both auth modes deep-link the Studio access URL, so a missing
+        # EMR_STUDIO_URL means notebook launch fails only when a user clicks —
+        # check at boot like the flags above.
+        if not self.EMR_STUDIO_URL:
+            problems.append(
+                "EMR_STUDIO_URL is not set (EMR Studio notebook launch would "
+                "fail at click time)"
+            )
         if problems:
             raise ValueError(
                 "Refusing to start with AUTH_MODE=prod and an unsafe "

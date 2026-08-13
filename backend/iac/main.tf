@@ -68,13 +68,6 @@ locals {
       DATAPLANE_RUNTIME_ROLE_ARN       = var.dataplane_runtime_role_arn == null ? "" : var.dataplane_runtime_role_arn
       EMR_AUTH_MODE                    = var.emr_auth_mode
     },
-    # IAM auth mode only: the Studio id + tier role ARNs the backend presigns
-    # with. In SSO mode EMR_STUDIO_URL (an ssm_secret above) is used instead.
-    var.emr_auth_mode == "IAM" ? {
-      EMR_STUDIO_ID                    = var.emr_studio_id
-      EMR_STUDIO_BASIC_ROLE_ARN        = var.emr_studio_basic_role_arn
-      EMR_STUDIO_INTERMEDIATE_ROLE_ARN = var.emr_studio_intermediate_role_arn
-    } : {},
   )
 }
 
@@ -245,17 +238,6 @@ data "aws_iam_policy_document" "task" {
       sid       = "AssumeDataplaneRuntime"
       actions   = ["sts:AssumeRole", "sts:TagSession"]
       resources = [var.dataplane_runtime_role_arn]
-    }
-  }
-
-  # EMR Studio IAM auth mode: assume the per-tier roles (with user/tenant
-  # session tags) to presign Studio URLs. Empty in SSO mode.
-  dynamic "statement" {
-    for_each = length(var.emr_studio_tier_role_arns) == 0 ? [] : [1]
-    content {
-      sid       = "AssumeEmrStudioTierRoles"
-      actions   = ["sts:AssumeRole", "sts:TagSession"]
-      resources = var.emr_studio_tier_role_arns
     }
   }
 }

@@ -164,9 +164,11 @@ are recorded by `audit_service.py` and surfaced at `/audit`.
 The backend **deep-links** into notebook environments; it never proxies
 them:
 
-- **EMR Studio** — a single platform-global Studio (SSO auth via IAM
-  Identity Center federated to Entra). The backend only reads the static
-  `EMR_STUDIO_URL` from SSM and redirects the browser.
+- **EMR Studio** — a single platform-global Studio. In **both** auth modes
+  the backend only reads the static `EMR_STUDIO_URL` from SSM and redirects
+  the browser; AWS's hosted sign-in flow authenticates the user (IAM /
+  IAM-federation for `auth_mode = IAM`, IAM Identity Center for `SSO`). The
+  backend never calls the EMR Studio API. See `docs/EMR_STUDIO_IAM_MODE.md`.
 - **SageMaker Studio** — presigned domain URLs
   (`sagemaker:CreatePresignedDomainUrl`).
 
@@ -333,11 +335,12 @@ per-account pipeline root. Full input documentation lives in each module's
 
 The **EMR Studio** module lives in the companion **`tmt-dataplane`** repo
 (`modules/emr-studio`) — see below. Default `auth_mode = "IAM"` (no Identity
-Center): the Studio (no `user_role`), two security groups, a service role, and
-two **assumable tier roles** (`basic`/`intermediate`) the backend presigns with.
-`auth_mode = "SSO"` swaps the tier roles for a shared user role + session
-policies + session mappings (Identity Center). See the module README and
-`docs/EMR_STUDIO_IAM_MODE.md`.
+Center): the Studio (no `user_role`), two security groups, and a service role.
+Users reach it through the Studio **access URL** (`EMR_STUDIO_URL`), where AWS's
+hosted flow signs them in via IAM / IAM-federation — the backend does **not**
+presign (`CreateStudioPresignedUrl` isn't in the boto3 SDK). `auth_mode = "SSO"`
+uses a shared user role + session policies + session mappings (Identity Center).
+See the module README and `docs/EMR_STUDIO_IAM_MODE.md`.
 
 Not created here (bring your own from the pipeline root): VPC/subnets, ECS
 cluster, ALB + target groups, security groups, DynamoDB table, S3 buckets,
