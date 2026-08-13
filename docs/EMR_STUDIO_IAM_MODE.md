@@ -106,17 +106,16 @@ Studio id nor any tier role to assume. The prod-config guard now simply requires
 
 ## Terraform (`tmt-dataplane/modules/emr-studio`)
 
-`auth_mode = "IAM"` creates the Studio with `auth_mode = "IAM"`, the two
-security groups, and the service role.
-
-> **Pending module change (Option A):** the module still creates two assumable
-> **tier roles** (`…-emr-studio-basic` / `…-emr-studio-intermediate`) from the
-> old backend-presign design. Under Option A the backend never assumes them, so
-> they are dead and should be **removed**; the module should instead expose the
-> IAM-federation **user role** (trusted by the SAML IdP) that the Studio access
-> URL federates into. Until that change lands, the tier roles are harmless but
-> unused. The backend module (`backend/iac`) has already dropped
-> `emr_studio_id` / tier-role variables and the `sts:AssumeRole` grant on them.
+`auth_mode = "IAM"` creates the Studio, the two security groups, the service
+role, and the two per-tier roles (`…-emr-studio-basic` / `-intermediate`) —
+now trusted by the **SAML provider** for `sts:AssumeRoleWithSAML` (not the
+backend). Supply the IdP via `saml_provider_arn` (existing) or
+`saml_metadata_document` (creates `aws_iam_saml_provider`). Root outputs:
+`emr_studio_url` (→ backend `EMR_STUDIO_URL`), `emr_studio_saml_provider_arn`
+and `emr_studio_tier_role_arns` (→ the Entra "Role" claim). The backend module
+(`backend/iac`) has dropped the old `emr_studio_id` / tier-role variables and
+the `sts:AssumeRole` grant. The Entra-side setup is in
+[EMR_STUDIO_FEDERATION_REQUEST.md](EMR_STUDIO_FEDERATION_REQUEST.md).
 
 ## Switching between modes
 
@@ -126,8 +125,11 @@ modes are mutually exclusive per Studio (the resource's `auth_mode` is
 immutable), so switching an existing Studio means replacing it.
 
 ## Open items
-- **EMR Studio IAM federation to Entra** — the SAML IdP + user role that gives
-  per-user identity. Prerequisite for Option A; not yet in the module.
-- **Module cleanup** — remove the unused tier roles; add the federation user
-  role (see "Pending module change" above).
+- **Entra-side SAML app** — the enterprise app, claims, and group→role mapping
+  must be configured by the Entra admin: see
+  [EMR_STUDIO_FEDERATION_REQUEST.md](EMR_STUDIO_FEDERATION_REQUEST.md). The
+  AWS-side module (SAML provider + tier roles) is done.
+- **SAML provider creation vs reference** — if the CI/CD role can't
+  `iam:CreateSAMLProvider` (permissions boundary), have an admin create it and
+  pass `saml_provider_arn` instead of the metadata document.
 - **MRM sign-off** on the federated-session attribution model.
