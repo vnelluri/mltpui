@@ -316,8 +316,9 @@ export function ModelsPage() {
   };
 
   // Launch a notebook in COLLABORATIVE mode: the session is tagged with the
-  // model's use case, so everyone launching from this row lands in the same
-  // shared workspace instead of an isolated personal session.
+  // model's use case, and collaborators share work by creating/joining the
+  // Workspace named usecase-<id> inside the Studio (EMR Studio's built-in
+  // collaboration) — the platform doesn't auto-land users in it.
   const launchNotebook = async (m: ModelVersion, sessionType: SessionType) => {
     const key = `${m.name}-${m.version}-${sessionType}`;
     setLaunchingNotebook(key);
@@ -334,7 +335,7 @@ export function ModelsPage() {
       const studio = sessionType === 'emr_studio' ? 'EMR Studio' : 'SageMaker Studio';
       setNotice(
         m.usecaseId
-          ? `${studio} opened in collaborative mode — workspace shared with everyone on ${m.usecaseId}.`
+          ? `${studio} opened for ${m.usecaseId} — create or join the Workspace named "usecase-${m.usecaseId}" and enable collaboration to share it.`
           : `${studio} session opened.`,
       );
     } catch (err) {
@@ -764,7 +765,7 @@ function NotebookLaunchIcon({
 }) {
   const label = studio === 'emr_studio' ? 'EMR Studio' : 'SageMaker Studio';
   const title = usecaseId
-    ? `Open ${label} — collaborative workspace for ${usecaseId}`
+    ? `Open ${label} — collaborate on ${usecaseId} (join Workspace "usecase-${usecaseId}")`
     : `Open ${label}`;
   return (
     <button

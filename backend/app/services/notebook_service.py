@@ -49,11 +49,16 @@ class NotebookService:
     ) -> tuple[str, str]:
         """Return ``(url, expires_at_iso)`` for the requested session type.
 
-        When ``usecase_id`` is given the session opens in collaborative mode:
-        the URL carries the use case as a fragment, which the Studio-side
-        bootstrap uses to land everyone working on that use case in the same
-        shared workspace. A fragment (not a query param) so it can never
-        invalidate a SageMaker presigned URL's signature.
+        When ``usecase_id`` is given the launch is collaborative *by
+        convention*: collaborators create/join a Workspace named
+        ``usecase-<id>`` in the Studio and use EMR Studio's built-in
+        collaboration; the platform records ``usecaseId`` on the session
+        (governance metadata) and the UI surfaces the convention. The
+        ``#collab=usecase:<id>`` fragment appended here is a best-effort
+        breadcrumb only — nothing AWS-side reads it, and it does not survive
+        the SAML sign-in hop (the HTTP-POST binding drops fragments), so no
+        code may depend on it. A fragment (not a query param) so it can
+        never invalidate a SageMaker presigned URL's signature.
 
         ``role`` is accepted for parity with the router/audit call site; the
         EMR access-URL path is role-independent (tiering is enforced by the

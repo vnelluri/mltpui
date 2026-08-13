@@ -55,6 +55,9 @@ def test_launch_is_auth_mode_independent(real_mode, monkeypatch):
 
 
 def test_launch_appends_collab_fragment(real_mode, monkeypatch):
+    # The fragment is a best-effort breadcrumb (dropped by the SAML sign-in
+    # hop; nothing AWS-side reads it) — but when appended it must be
+    # well-formed and never a query param.
     monkeypatch.setattr(settings, "EMR_STUDIO_URL", STUDIO_URL)
     url, expires_at = real_mode.launch(
         "emr_studio", "tenant-a", "user-1", "DataScientist", usecase_id="UC-1043"

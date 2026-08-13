@@ -81,9 +81,15 @@ Step by step:
    of this code path.
    - Either mode: if `usecaseId` was passed, `launch()` appends
      `#collab=usecase:<id>` — a URL *fragment*, so it can never invalidate a
-     presigned signature — which the Studio-side bootstrap uses to land
-     collaborators in a shared workspace. With `EMR_MOCK_MODE=true` (local dev)
-     a fake `https://mock-emr.local/session/<uuid>` is returned before any of
+     presigned signature. The fragment is a **best-effort breadcrumb only**:
+     nothing AWS-side reads it, and it does not survive the SAML sign-in hop
+     (the HTTP-POST binding drops fragments; it arrives only for users whose
+     Studio session is already active). **Collaborative mode works by
+     convention instead**: collaborators create/join the Workspace named
+     `usecase-<id>` and enable EMR Studio's built-in collaboration; the
+     platform records `usecaseId` on the session as governance metadata and
+     the UI surfaces the convention. With `EMR_MOCK_MODE=true` (local dev) a
+     fake `https://mock-emr.local/session/<uuid>` is returned before any of
      this.
 
 4. **Sign-in** — the new tab hits the Studio's access URL and AWS's hosted flow

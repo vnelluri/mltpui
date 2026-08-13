@@ -4,8 +4,10 @@ import type { NotebookSession, SessionType, Paginated } from '../types/platform'
 export interface LaunchNotebookPayload {
   sessionType: SessionType;
   tenantId: string;
-  /** Launch in collaborative mode for a business use case — everyone
-   * launching against the same use case shares one workspace. */
+  /** Launch in collaborative mode for a business use case — collaborators
+   * create/join the Workspace named `usecase-<id>` in the Studio (EMR
+   * Studio's built-in collaboration); recorded on the session as
+   * governance metadata. */
   usecaseId?: string;
 }
 

@@ -295,8 +295,10 @@ class NotebookSession(BaseModel):
     tenantId: Optional[str] = None
     sessionType: str
     # Set when the session was launched in collaborative mode from a model
-    # registry row: everyone opening a notebook against the same use case
-    # lands in that use case's shared workspace.
+    # registry row. Collaboration is by convention — users create/join the
+    # Workspace named usecase-<id> with EMR Studio's built-in collaboration;
+    # this field is the governance-metadata record of that intent (nothing
+    # auto-lands users in a shared workspace).
     usecaseId: Optional[str] = None
     # Returned ONCE in the launch response, never persisted — a presigned
     # URL is a credential; the stored record is metadata only (see
