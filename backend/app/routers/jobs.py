@@ -153,7 +153,7 @@ def _resolve_target_tenant(body: JobCreateRequest, user: CurrentUser) -> Tenant:
     if tenant.status != TenantStatus.ACTIVE.value:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Tenant '{tenant_id}' is suspended — job submission is disabled.",
+            detail=f"Tenant '{tenant_id}' is {tenant.status} — job submission is disabled.",
         )
     if tenant.provisioningStatus != ProvisioningStatus.ACTIVE.value:
         raise HTTPException(
