@@ -1,4 +1,13 @@
-"""Snowflake OAuth token exchange, KMS token encryption, and query execution.
+"""Snowflake OAuth via Entra (authorization-code + refresh), KMS token
+encryption, and query execution.
+
+Snowflake is configured for **External OAuth trusting Entra**: it validates
+Entra-issued access tokens directly — there is no Snowflake-side token
+endpoint in this flow. The backend is a confidential app client in Entra;
+the user consents once (authorization-code grant with ``offline_access``)
+and the stored refresh token lets the backend re-mint access tokens without
+the user present (web refresh and, later, notebook secrets — see
+docs/NOTEBOOK_SNOWFLAKE_OIDC.md).
 
 In ``SNOWFLAKE_MOCK_MODE`` (the local-dev default) every external call is
 replaced with realistic mock data whose *shape* is identical to the real
@@ -15,10 +24,13 @@ from __future__ import annotations
 
 import base64
 import hashlib
+import hmac
+import json
 import logging
 import random
 import re
 import uuid
+from urllib.parse import urlencode
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -312,52 +324,123 @@ class SnowflakeService:
     def __init__(self) -> None:
         self.mock = settings.SNOWFLAKE_MOCK_MODE
 
-    # ── Token exchange ───────────────────────────────────────────────────
-    def exchange_token(
-        self, entra_access_token: str, user_email: str
-    ) -> Tuple[str, str, str]:
-        """Exchange an Entra token for a Snowflake OAuth token.
-
-        Returns ``(raw_token, snowflake_username, expires_at_iso)``.
-        """
-        if self.mock:
-            raw_token = f"mock-sf-token-{uuid.uuid4()}"
-            username = self._derive_username(user_email)
-            expires_at = (
-                datetime.now(timezone.utc) + timedelta(hours=1)
-            ).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-            return raw_token, username, expires_at
-
-        token_url = settings.snowflake_token_url
-        if not token_url:
-            raise RuntimeError("SNOWFLAKE_TOKEN_URL / SNOWFLAKE_ACCOUNT not configured.")
-
-        data = {
-            "grant_type": "urn:ietf:params:oauth:grant-type:token-exchange",
-            "subject_token": entra_access_token,
-            "subject_token_type": "urn:ietf:params:oauth:token-type:jwt",
-            # The scope names a Snowflake ROLE (created + pre-authorized by
-            # setup_snowflake_integration.sql) — not the integration name.
-            "scope": f"session:role:{settings.SNOWFLAKE_DEFAULT_ROLE}",
-        }
-        auth = None
-        if settings.SNOWFLAKE_OAUTH_CLIENT_ID and settings.SNOWFLAKE_OAUTH_CLIENT_SECRET:
-            auth = (
-                settings.SNOWFLAKE_OAUTH_CLIENT_ID,
-                settings.SNOWFLAKE_OAUTH_CLIENT_SECRET,
-            )
-        with httpx.Client(timeout=30.0) as client:
-            resp = client.post(token_url, data=data, auth=auth)
-            resp.raise_for_status()
-            payload = resp.json()
-
-        raw_token = payload["access_token"]
-        expires_in = int(payload.get("expires_in", 3600))
+    # ── Entra OAuth (authorization-code + refresh) ───────────────────────
+    def mock_connect(self, user_email: str) -> Tuple[str, str, str]:
+        """Mock-mode connect: fabricate ``(token, username, expires_at)``."""
+        raw_token = f"mock-sf-token-{uuid.uuid4()}"
+        username = self._derive_username(user_email)
         expires_at = (
-            datetime.now(timezone.utc) + timedelta(seconds=expires_in)
+            datetime.now(timezone.utc) + timedelta(hours=1)
         ).strftime("%Y-%m-%dT%H:%M:%S.%fZ")
-        username = payload.get("username") or self._derive_username(user_email)
         return raw_token, username, expires_at
+
+    @staticmethod
+    def _oauth_scope() -> str:
+        return f"openid email offline_access {settings.SNOWFLAKE_OAUTH_SCOPE}"
+
+    def build_authorize_url(self, state: str) -> str:
+        """The Entra authorize URL the SPA redirects the user to for consent."""
+        authorize_url = settings.entra_authorize_url
+        redirect_uri = settings.snowflake_oauth_redirect_uri
+        if not (
+            authorize_url
+            and redirect_uri
+            and settings.SNOWFLAKE_OAUTH_CLIENT_ID
+            and settings.SNOWFLAKE_OAUTH_SCOPE
+        ):
+            raise RuntimeError(
+                "Snowflake OAuth is not configured: set ENTRA_TENANT_ID, "
+                "SNOWFLAKE_OAUTH_CLIENT_ID/SECRET, SNOWFLAKE_OAUTH_SCOPE and "
+                "PLATFORM_API_BASE_URL."
+            )
+        params = {
+            "client_id": settings.SNOWFLAKE_OAUTH_CLIENT_ID,
+            "response_type": "code",
+            "response_mode": "query",
+            "redirect_uri": redirect_uri,
+            "scope": self._oauth_scope(),
+            "state": state,
+        }
+        return f"{authorize_url}?{urlencode(params)}"
+
+    def redeem_auth_code(self, code: str) -> Dict[str, Any]:
+        """Redeem an authorization code at Entra's token endpoint.
+
+        ``email`` in the returned bundle is best-effort from the (unverified)
+        id_token — identity binding comes from the HMAC-signed OAuth state,
+        never from here.
+        """
+        payload = self._token_request(
+            {
+                "grant_type": "authorization_code",
+                "code": code,
+                "redirect_uri": settings.snowflake_oauth_redirect_uri or "",
+            }
+        )
+        return self._token_bundle(
+            payload, email=self._id_token_email(payload.get("id_token"))
+        )
+
+    def refresh_access_token(self, refresh_token: str) -> Dict[str, Any]:
+        """Mint a fresh access token from a stored refresh token.
+
+        Entra rotates refresh tokens — when the bundle carries a new one the
+        caller must store it in place of the old.
+        """
+        payload = self._token_request(
+            {"grant_type": "refresh_token", "refresh_token": refresh_token}
+        )
+        return self._token_bundle(payload)
+
+    def _token_request(self, grant: Dict[str, str]) -> Dict[str, Any]:
+        token_url = settings.entra_token_url
+        if not token_url:
+            raise RuntimeError("ENTRA_TENANT_ID is not configured.")
+        data = {
+            "client_id": settings.SNOWFLAKE_OAUTH_CLIENT_ID or "",
+            "client_secret": settings.SNOWFLAKE_OAUTH_CLIENT_SECRET or "",
+            "scope": self._oauth_scope(),
+            **grant,
+        }
+        with httpx.Client(timeout=30.0) as client:
+            resp = client.post(token_url, data=data)
+            resp.raise_for_status()
+            return resp.json()
+
+    @staticmethod
+    def _token_bundle(
+        payload: Dict[str, Any], email: Optional[str] = None
+    ) -> Dict[str, Any]:
+        now = datetime.now(timezone.utc)
+        expires_in = int(payload.get("expires_in", 3600))
+        bundle: Dict[str, Any] = {
+            "access_token": payload["access_token"],
+            "refresh_token": payload.get("refresh_token"),
+            "expires_at": (now + timedelta(seconds=expires_in)).strftime(
+                "%Y-%m-%dT%H:%M:%S.%fZ"
+            ),
+            # Entra refresh tokens live ~90 days of inactivity; treated as a
+            # TTL horizon (each successful refresh re-extends it), not a hard
+            # expiry.
+            "refresh_expires_at": (now + timedelta(days=90)).strftime(
+                "%Y-%m-%dT%H:%M:%S.%fZ"
+            ),
+        }
+        if email:
+            bundle["email"] = email
+        return bundle
+
+    @staticmethod
+    def _id_token_email(id_token: Optional[str]) -> Optional[str]:
+        if not id_token or id_token.count(".") != 2:
+            return None
+        try:
+            body = id_token.split(".")[1]
+            body += "=" * (-len(body) % 4)
+            claims = json.loads(base64.urlsafe_b64decode(body))
+        except Exception:
+            return None
+        return claims.get("preferred_username") or claims.get("email")
 
     @staticmethod
     def _derive_username(email: str) -> str:
@@ -500,4 +583,51 @@ def _stable_salt(text: str) -> int:
 
 
 # Module-level singleton.
+# ── OAuth state (CSRF + identity binding for the redirect callback) ──────────
+#
+# The Entra redirect arrives WITHOUT our Authorization header, so the state
+# must carry the user identity — HMAC-signed so it cannot be forged, with a
+# short expiry. Key = the app-client secret (present whenever the real flow
+# is configured; a fixed dev key keeps mock/dev mode importable).
+
+_STATE_TTL_SECONDS = 600
+
+
+def _state_key() -> bytes:
+    return (settings.SNOWFLAKE_OAUTH_CLIENT_SECRET or "dev-state-key").encode()
+
+
+def make_oauth_state(
+    user_id: str, email: str, tenant_id: Optional[str], role: str
+) -> str:
+    payload = {
+        "u": user_id,
+        "e": email,
+        "t": tenant_id,
+        "r": role,
+        "x": int(datetime.now(timezone.utc).timestamp()) + _STATE_TTL_SECONDS,
+    }
+    body = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+    sig = hmac.new(_state_key(), body.encode(), hashlib.sha256).hexdigest()
+    return f"{body}.{sig}"
+
+
+def verify_oauth_state(state: str) -> Optional[Dict[str, Any]]:
+    """Return the state payload, or None if malformed, tampered or expired."""
+    try:
+        body, sig = state.split(".", 1)
+    except ValueError:
+        return None
+    expected = hmac.new(_state_key(), body.encode(), hashlib.sha256).hexdigest()
+    if not hmac.compare_digest(sig, expected):
+        return None
+    try:
+        payload = json.loads(base64.urlsafe_b64decode(body + "=" * (-len(body) % 4)))
+    except Exception:
+        return None
+    if int(payload.get("x", 0)) < int(datetime.now(timezone.utc).timestamp()):
+        return None
+    return payload
+
+
 snowflake_service = SnowflakeService()

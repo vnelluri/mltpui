@@ -281,6 +281,8 @@ export interface SnowflakeStatus {
   connected: boolean;
   snowflakeUsername: string | null;
   expiresAt: string | null;
+  /** Real mode only: consent needed — redirect the browser here (Entra). */
+  authorizeUrl?: string | null;
 }
 
 export interface SnowflakeQueryResult {

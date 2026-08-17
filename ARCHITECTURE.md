@@ -18,7 +18,7 @@ and how it is laid out in production. For local-dev instructions see
 | Training compute | EMR Serverless / SageMaker Training | Dataplane account (per tenant) | Launch targets for training jobs |
 | Notebooks | EMR Studio (SSO), SageMaker Studio | Dataplane / platform-global | Deep-linked from the UI; backend never calls the Studio API |
 | Identity | Cognito (Hosted UI) ← SAML ← Azure AD | External | Authentication + role/tenant derivation from group names (`custom:groups`) |
-| Data warehouse | Snowflake (OAuth token exchange) | External | Per-user data access from the UI and from training jobs |
+| Data warehouse | Snowflake (External OAuth via Entra) | External | Per-user data access from the UI and from training jobs |
 | Secrets/config | SSM Parameter Store, Secrets Manager, KMS | Both accounts | Config injection, token encryption, per-job credential transit |
 
 Per-tenant compute infrastructure (EMR Serverless applications, execution
@@ -140,11 +140,13 @@ frontend gating is UX only — the backend is the enforcement point.
 
 ### 3.4 Snowflake per-user OAuth
 
-- The backend exchanges the user's bearer token (prod: the Cognito ID
-  token — Snowflake's External OAuth integration must trust the user pool)
-  for a Snowflake OAuth token via **RFC 8693 token exchange**
-  (`snowflake_service.py`), so Snowflake sees the actual user identity —
-  no shared service account.
+- Snowflake tokens are minted at **Entra** via the **authorization-code +
+  refresh** flow (`snowflake_service.py`): the user consents once
+  ("Connect Snowflake" → Entra → backend callback), the KMS-encrypted
+  refresh token lets the backend re-mint without the user present, and
+  Snowflake's **External OAuth integration trusting Entra** validates the
+  tokens directly — Snowflake sees the actual user identity, no shared
+  service account, no Snowflake-side token endpoint.
 - Tokens are **KMS-encrypted at rest** in DynamoDB. Encryption failures
   fail **closed**: a `KmsEncryptionError` returns 503 rather than ever
   storing or using a plaintext token.
@@ -419,7 +421,7 @@ The backend container gets its configuration two ways
 - **Container secrets** — pulled at task start by the execution role:
   - SSM parameters under `/ml-platform/*`: Cognito user-pool/app-client IDs,
     CORS origins, EMR Studio URL, SageMaker domain/training image,
-    Snowflake account/token-URL/client-id.
+    Snowflake account/oauth-scope/client-id, Entra tenant id.
   - Secrets Manager: `SNOWFLAKE_OAUTH_CLIENT_SECRET`.
 
 Frontend configuration (`VITE_*`: API base URL, Cognito IDs, demo mode) is

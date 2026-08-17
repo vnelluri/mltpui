@@ -34,7 +34,9 @@ class SnowflakeTokenRepository:
         item = {
             "entityType": "SnowflakeTokenCache",
             **Keys.snowflake_token(cache.userId),
-            "ttl": _iso_to_epoch(cache.expiresAt),
+            # The row must outlive the ~1h access token when a refresh token
+            # is stored — TTL on the refresh horizon in that case.
+            "ttl": _iso_to_epoch(cache.refreshExpiresAt or cache.expiresAt),
             **cache.model_dump(),
         }
         self.table.put_item(Item=clean_item(item))

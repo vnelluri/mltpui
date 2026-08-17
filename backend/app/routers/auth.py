@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from app.auth.models import CurrentUser
 from app.config import settings
 from app.dependencies import get_current_user
-from app.routers.snowflake import connect_snowflake
+from app.routers.snowflake import connect_snowflake_mock, ensure_valid_cache
 
 router = APIRouter(prefix="/auth", tags=["auth"])
 
@@ -75,9 +75,15 @@ def token_info(request: Request) -> Dict[str, Any]:
 def get_snowflake_token(
     user: CurrentUser = Depends(get_current_user),
 ) -> Dict[str, Any]:
-    """Exchange the current user's bearer token for a Snowflake OAuth token.
+    """Ensure the current user has a valid cached Snowflake token.
 
-    The raw token is never returned — only the resolved username and expiry.
+    Mock mode mints one on the spot; real mode returns the cached token's
+    status, transparently refreshing via the stored Entra refresh token
+    (400 if the user never connected — use POST /snowflake/connect). The
+    raw token is never returned — only the resolved username and expiry.
     """
-    cache = connect_snowflake(user)
+    if settings.SNOWFLAKE_MOCK_MODE:
+        cache = connect_snowflake_mock(user)
+    else:
+        cache = ensure_valid_cache(user)
     return {"snowflakeUsername": cache.snowflakeUsername, "expiresAt": cache.expiresAt}

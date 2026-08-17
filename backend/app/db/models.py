@@ -330,6 +330,14 @@ class SnowflakeTokenCache(BaseModel):
     userId: str
     snowflakeToken: str  # KMS-encrypted, base64 — never returned to clients
     expiresAt: str
+    # KMS-encrypted Entra refresh token — lets the backend re-mint access
+    # tokens without the user present (web refresh + notebook secrets).
+    # None in mock mode.
+    snowflakeRefreshToken: Optional[str] = None
+    # Horizon after which the refresh token is assumed stale (drives the
+    # row's DynamoDB TTL so the refresh token isn't reaped with the ~1h
+    # access token).
+    refreshExpiresAt: Optional[str] = None
     issuedAt: str = Field(default_factory=utcnow_iso)
     tenantId: Optional[str] = None
     snowflakeUsername: str

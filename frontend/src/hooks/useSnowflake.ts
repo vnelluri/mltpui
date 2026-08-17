@@ -58,6 +58,12 @@ export function useSnowflake(pollMs = 60000): UseSnowflakeResult {
     setLoading(true);
     try {
       const result = await snowflakeApi.connect();
+      if (result.authorizeUrl) {
+        // Real mode: consent happens at Entra; the backend callback stores
+        // the tokens and redirects back to /snowflake.
+        window.location.assign(result.authorizeUrl);
+        return;
+      }
       setStatus(result);
       setError(null);
     } catch (err) {

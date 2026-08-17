@@ -20,9 +20,13 @@ API validates Cognito tokens — same problem, recursive).
 
 What we do have:
 
-- `snowflake_service.exchange_token` — the backend already exchanges the
-  user's Entra token for a per-user Snowflake OAuth token (RFC 8693 / Entra
-  **on-behalf-of**), with tokens KMS-encrypted in DynamoDB.
+- Per-user Entra-issued Snowflake tokens, minted by the backend via the
+  **authorization-code + refresh** flow (`snowflake_service.py` —
+  `build_authorize_url` / `redeem_auth_code` / `refresh_access_token`): the
+  user consents once at Entra, and the KMS-encrypted **refresh token** in
+  DynamoDB lets the backend re-mint access tokens *without the user
+  present*. (This replaced an earlier pseudo-exchange that could never work
+  in real mode — see "Seeding verdict" below.)
 - A proven delivery path to dataplane compute: the per-job Secrets Manager
   TTL secret (`run_token_service.py`) that training jobs already read.
 
@@ -34,12 +38,11 @@ The design is just those two pieces, applied at notebook-launch time.
 User ── Entra login ──► Platform SPA (app client in Entra)
                           │ user's Entra-issued token
                           ▼
-              POST /notebooks/launch (backend — the one moment that has
-                          │           BOTH the user's Entra identity and
-                          │           the AWS delivery machinery)
-                          │ OBO exchange at Entra:
-                          │   assertion = user's token
-                          │   scope     = Snowflake app scope (session:scope…)
+              POST /notebooks/launch (backend)
+                          │ mint at Entra: redeem the user's stored
+                          │ refresh token (from their one-time
+                          │ authorization-code consent — "Connect
+                          │ Snowflake" in the UI)
                           │ ◄─ Entra access token, aud = Snowflake app,
                           │     upn = the user
                           ▼
@@ -88,18 +91,14 @@ naming discipline.
 ## Token lifetime & refresh
 
 Entra access tokens live ~60–90 minutes; notebook sessions run for hours.
+Because the backend holds a KMS-encrypted **refresh token** (from the
+`offline_access` consent), it can re-mint **without the user present** —
+so background refresh is available from day one: rewrite the secret on a
+schedule while a session is active, or lazily via a "Refresh Snowflake
+token" UI action (user re-runs the helper cell).
 
-- **MVP:** a "Refresh Snowflake token" action in the platform UI — the backend
-  re-runs the OBO exchange and rewrites the secret; the user re-runs the
-  helper cell. Expired token → clear Snowflake auth error → one click, one
-  cell re-run.
-- **Later:** background refresh while a session is active. Requesting
-  `offline_access` in the OBO exchange yields a refresh token (KMS-encrypted
-  in DynamoDB, as today), letting the backend re-mint **without the user
-  present** and rewrite the secret on a schedule for sessions marked active.
-
-Either way the notebook only ever sees short-lived access tokens — never a
-refresh token.
+The notebook only ever sees short-lived access tokens — never a refresh
+token.
 
 ## Notebook helper (what users paste in a cell)
 
@@ -144,13 +143,24 @@ secret-transit foundation, see `run_token_service.py`.)
 4. Backend: launch-time hook in `POST /notebooks/launch` (OBO + secret write),
    tier-role policy statement, refresh endpoint/action.
 
+## Seeding verdict (resolved)
+
+The original open question — how the backend seeds the token mint — was
+audited and the pre-existing code **could not work in real mode**: it fed
+the *Cognito* ID token (which Entra will not accept as an assertion) into
+an RFC 8693 exchange aimed at *Snowflake's* token endpoint (which does not
+implement RFC 8693; External OAuth has no exchange step at Snowflake at
+all). It had only ever run behind `SNOWFLAKE_MOCK_MODE=true` — the same
+failure class as the EMR `CreateStudioPresignedUrl` presign bug.
+
+Resolution: "Connect Snowflake" now runs a real Entra
+**authorization-code** flow (confidential app client, scope = Snowflake app
+scope + `offline_access`); the backend stores the KMS-encrypted refresh
+token and mints access tokens from it at will. Consequence for this design:
+**background refresh of notebook secrets works from day one.**
+
 ## Open items / to verify
 
-- **OBO seeding** — OBO requires an *Entra-issued* assertion for our app
-  client; a Cognito token cannot seed it. `exchange_token` already takes an
-  Entra token, so confirm how the backend obtains it (SPA acquires it, or a
-  stored refresh token is replayed). This decides whether background refresh
-  (needs stored refresh tokens) is available from day one.
 - Secret TTL + cleanup cadence for stale user secrets (mirror the job-secret
   TTL approach).
 - MRM sign-off on the attribution chain (extends the EMR Studio federation

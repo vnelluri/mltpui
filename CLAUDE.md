@@ -27,5 +27,5 @@ Local dev runs entirely in Docker (LocalStack + backend + frontend) — no host 
 - Switching dev roles: edit `DEV_USER_ROLE` (and `DEV_USER_TENANT_ID`) in `.env`, then `docker compose restart backend`. The frontend role dropdown is cosmetic; the backend synthetic user is the real role.
 - Tenancy: every backend query is tenant-scoped via `CurrentUser` (see `backend/app/auth/models.py`, `dependencies.py`). Never bypass tenant scoping.
 - DynamoDB: single-table design with GSIs + TTL; repos own all item shapes.
-- Snowflake: per-user OAuth token exchange (RFC 8693); tokens KMS-encrypted in DynamoDB, handed to jobs via Secrets Manager TTL secrets.
+- Snowflake: per-user OAuth via Entra (authorization-code + refresh; Snowflake External OAuth trusts Entra — no Snowflake-side token endpoint); tokens KMS-encrypted in DynamoDB, handed to jobs via Secrets Manager TTL secrets.
 - Control-plane / dataplane account split lives in the companion `tmt-dataplane` repo.

@@ -145,13 +145,24 @@ class Settings(BaseSettings):
     # ── Snowflake OAuth ─────────────────────────────────────────────────────
     SNOWFLAKE_ACCOUNT: Optional[str] = None
     SNOWFLAKE_OAUTH_INTEGRATION_NAME: str = "ml_platform_oauth"
-    SNOWFLAKE_TOKEN_URL: Optional[str] = None
+    # Entra tenant hosting our app client and the Snowflake app registration.
+    # Snowflake tokens are minted at Entra (authorization-code + refresh
+    # grants) and presented directly to Snowflake, whose External OAuth
+    # integration trusts Entra as issuer — there is no Snowflake-side token
+    # endpoint in this flow.
+    ENTRA_TENANT_ID: Optional[str] = None
+    # Our confidential app client in Entra (authorization-code + refresh).
     SNOWFLAKE_OAUTH_CLIENT_ID: Optional[str] = None
     SNOWFLAKE_OAUTH_CLIENT_SECRET: Optional[str] = None
+    # Scope of the Snowflake app registration in Entra (e.g.
+    # "api://<snowflake-app-uri>/session:scope:analyst") — appended to
+    # "openid email offline_access" on the authorize/token requests. Snowflake
+    # maps the resulting scp claim to the session role.
+    SNOWFLAKE_OAUTH_SCOPE: Optional[str] = None
     SNOWFLAKE_DEFAULT_WAREHOUSE: str = "COMPUTE_WH"
-    # The Snowflake ROLE requested in the token-exchange scope
-    # (session:role:<this>). Matches what setup_snowflake_integration.sql
-    # creates and pre-authorizes — NOT the integration name.
+    # Default Snowflake ROLE for platform sessions. With External OAuth the
+    # active role comes from the Entra token's scp claim as mapped by
+    # setup_snowflake_integration.sql — this names that pre-authorized role.
     SNOWFLAKE_DEFAULT_ROLE: str = "ML_PLATFORM_ROLE"
     # Minimum remaining validity a cached Snowflake token must have at job
     # submission: the job consumes it for the initial data read, so an
@@ -245,6 +256,21 @@ class Settings(BaseSettings):
                 "EMR_STUDIO_URL is not set (EMR Studio notebook launch would "
                 "fail at click time)"
             )
+        # Real-mode Snowflake mints tokens at Entra (authorization-code +
+        # refresh); a missing app-client setting fails only when a user
+        # connects — check at boot like the flags above.
+        for name in (
+            "ENTRA_TENANT_ID",
+            "SNOWFLAKE_OAUTH_CLIENT_ID",
+            "SNOWFLAKE_OAUTH_CLIENT_SECRET",
+            "SNOWFLAKE_OAUTH_SCOPE",
+            "SNOWFLAKE_ACCOUNT",
+        ):
+            if not getattr(self, name):
+                problems.append(
+                    f"{name} is not set (Snowflake connect would fail at "
+                    "click time)"
+                )
         if problems:
             raise ValueError(
                 "Refusing to start with AUTH_MODE=prod and an unsafe "
@@ -279,15 +305,34 @@ class Settings(BaseSettings):
         return f"{self.issuer}/.well-known/jwks.json"
 
     @property
-    def snowflake_token_url(self) -> Optional[str]:
-        if self.SNOWFLAKE_TOKEN_URL:
-            return self.SNOWFLAKE_TOKEN_URL
-        if self.SNOWFLAKE_ACCOUNT:
-            return (
-                f"https://{self.SNOWFLAKE_ACCOUNT}."
-                f"snowflakecomputing.com/oauth/token-request"
-            )
-        return None
+    def entra_authorize_url(self) -> Optional[str]:
+        if not self.ENTRA_TENANT_ID:
+            return None
+        return (
+            f"https://login.microsoftonline.com/{self.ENTRA_TENANT_ID}"
+            "/oauth2/v2.0/authorize"
+        )
+
+    @property
+    def entra_token_url(self) -> Optional[str]:
+        if not self.ENTRA_TENANT_ID:
+            return None
+        return (
+            f"https://login.microsoftonline.com/{self.ENTRA_TENANT_ID}"
+            "/oauth2/v2.0/token"
+        )
+
+    @property
+    def snowflake_oauth_redirect_uri(self) -> Optional[str]:
+        if not self.PLATFORM_API_BASE_URL:
+            return None
+        return self.PLATFORM_API_BASE_URL.rstrip("/") + "/snowflake/oauth/callback"
+
+    @property
+    def frontend_base_url(self) -> Optional[str]:
+        # By convention the first CORS origin is the SPA — used as the
+        # post-OAuth-callback redirect target.
+        return self.CORS_ALLOWED_ORIGINS[0] if self.CORS_ALLOWED_ORIGINS else None
 
 
 @lru_cache(maxsize=1)

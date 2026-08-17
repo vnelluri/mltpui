@@ -137,11 +137,11 @@ talks to the Hosted UI domain and Azure AD on the user's own network.
 
 ## Consequences to be aware of
 
-- **Snowflake token exchange**: `POST /snowflake/connect` forwards the
-  user's bearer token to Snowflake's RFC 8693 exchange. The Snowflake
-  **External OAuth security integration must now trust the Cognito user
-  pool** (issuer/JWKS) instead of Entra, and map a claim to the Snowflake
-  login name. Coordinate with the Snowflake admin before flipping prod.
+- **Snowflake is unaffected** by the Cognito flow: Snowflake tokens are
+  minted at **Entra** (authorization-code + refresh via our app client —
+  `POST /snowflake/connect` returns the authorize URL) and Snowflake's
+  External OAuth integration keeps trusting **Entra**, never the Cognito
+  user pool.
 - **Group changes still apply at next sign-in** (a new SAML assertion →
   fresh `custom:groups`), same as the old flow.
 - **EMR Studio SSO is unrelated** to this flow — it authenticates via IAM

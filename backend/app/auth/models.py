@@ -80,8 +80,9 @@ class CurrentUser(BaseModel):
     machineJobId: Optional[str] = None
     machineExperimentId: Optional[str] = None
     machineRunId: Optional[str] = None
-    # The user's raw bearer token (prod: the Cognito ID token) — used for
-    # Snowflake token exchange. Never persisted or logged.
+    # The user's raw bearer token (prod: the Cognito ID token). Never
+    # persisted or logged. (Not usable for Snowflake — those tokens are
+    # minted at Entra via the authorization-code/refresh flow.)
     accessToken: Optional[str] = Field(default=None, exclude=True)
 
     @property

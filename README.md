@@ -248,24 +248,31 @@ more than AD does. If no group matches the convention, the API returns
 
 ## Snowflake OAuth integration setup
 
-The platform is an OAuth client against Snowflake, exchanging each user's
-bearer token (prod: the Cognito ID token) for a Snowflake OAuth token
-(RFC 8693 token-exchange) so jobs and queries run under the **submitting
-user's** Snowflake identity — not a shared service account.
+Snowflake tokens are minted at **Entra** (authorization-code + refresh
+grants; our confidential app client) and presented directly to Snowflake,
+whose **External OAuth integration trusts Entra** — so jobs and queries run
+under the **connecting user's** Snowflake identity, not a shared service
+account. There is no Snowflake-side token endpoint in this flow.
 
-1. As **ACCOUNTADMIN**, run `backend/scripts/setup_snowflake_integration.sql`.
-   It creates `SECURITY INTEGRATION ml_platform_oauth` (custom OAuth client),
-   an `ML_PLATFORM_ROLE`, resource monitors, and warehouse
-   grants, and ends with `DESCRIBE SECURITY INTEGRATION ml_platform_oauth;`.
-2. Copy the client ID/secret shown by `DESCRIBE SECURITY INTEGRATION` into
+1. In **Entra**: an app registration for the Snowflake resource (exposes the
+   scope you put in `SNOWFLAKE_OAUTH_SCOPE`) and our app client
+   (`SNOWFLAKE_OAUTH_CLIENT_ID`/`SECRET`) with a redirect URI of
+   `<PLATFORM_API_BASE_URL>/snowflake/oauth/callback`.
+2. In **Snowflake**, as **ACCOUNTADMIN**: an **External OAuth** security
+   integration trusting the Entra tenant (issuer/JWKS/audience), mapping the
+   token's login claim to the Snowflake user and `scp` to the session role.
+   `backend/scripts/setup_snowflake_integration.sql` also creates
+   `ML_PLATFORM_ROLE`, resource monitors, and warehouse grants (its
+   custom-OAuth-client integration is superseded by External OAuth).
+3. Fill in `ENTRA_TENANT_ID`, `SNOWFLAKE_OAUTH_SCOPE`,
    `SNOWFLAKE_OAUTH_CLIENT_ID` / `SNOWFLAKE_OAUTH_CLIENT_SECRET` in `.env`.
-3. Configure the **Cognito user pool** as a **trusted identity provider**
-   (External OAuth issuer/JWKS) in the Snowflake integration.
-4. Test with `POST /snowflake/connect` using a real Cognito ID token and
-   confirm the returned `snowflakeUsername` matches the expected user.
+4. Test with `POST /snowflake/connect` — follow the returned `authorizeUrl`,
+   consent at Entra, and confirm the resulting `snowflakeUsername` matches
+   the expected user.
 
-Tokens are encrypted with AWS KMS (`KMS_SNOWFLAKE_KEY_ARN`) before being cached
-in the `SnowflakeTokenCache` items (auto-expired by DynamoDB TTL on `expiresAt`).
+Tokens (access + Entra refresh) are encrypted with AWS KMS
+(`KMS_SNOWFLAKE_KEY_ARN`) before being cached in the `SnowflakeTokenCache`
+items (auto-expired by DynamoDB TTL).
 When passed to EMR/SageMaker jobs, they transit via AWS Secrets Manager (secret
 ARN only, TTL-bound, deleted after the job) — never as plaintext env vars.
 
@@ -281,7 +288,7 @@ ARN only, TTL-bound, deleted after the job) — never as plaintext env vars.
       `S3_ENDPOINT_URL`, `KMS_ENDPOINT_URL`, `SECRETS_MANAGER_ENDPOINT_URL`.
 - [ ] Disable all mock modes: `EMR_MOCK_MODE=false`, `SAGEMAKER_MOCK_MODE=false`,
       `SNOWFLAKE_MOCK_MODE=false`.
-- [ ] Fill in `SNOWFLAKE_ACCOUNT`, `SNOWFLAKE_TOKEN_URL`,
+- [ ] Fill in `SNOWFLAKE_ACCOUNT`, `ENTRA_TENANT_ID`, `SNOWFLAKE_OAUTH_SCOPE`,
       `SNOWFLAKE_OAUTH_CLIENT_ID`, `SNOWFLAKE_OAUTH_CLIENT_SECRET`.
 - [ ] Create a real AWS KMS key and set `KMS_SNOWFLAKE_KEY_ARN` (the local
       `setup_local_kms.py` step is replaced by real KMS provisioning).

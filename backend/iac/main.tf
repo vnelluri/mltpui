@@ -41,7 +41,8 @@ locals {
       SAGEMAKER_DOMAIN_ID       = "${local.ssm_arn}/sagemaker/domain-id"
       SAGEMAKER_TRAINING_IMAGE  = "${local.ssm_arn}/sagemaker/training-image"
       SNOWFLAKE_ACCOUNT         = "${local.ssm_arn}/snowflake/account"
-      SNOWFLAKE_TOKEN_URL       = "${local.ssm_arn}/snowflake/token-url"
+      ENTRA_TENANT_ID           = "${local.ssm_arn}/entra/tenant-id"
+      SNOWFLAKE_OAUTH_SCOPE     = "${local.ssm_arn}/snowflake/oauth-scope"
       SNOWFLAKE_OAUTH_CLIENT_ID = "${local.ssm_arn}/snowflake/oauth-client-id"
     },
     local.split_enabled ? {} : {
