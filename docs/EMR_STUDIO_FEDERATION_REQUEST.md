@@ -26,7 +26,7 @@ sign-in.**
 | Side | Owner | Artifact |
 |---|---|---|
 | IAM SAML provider (AWS) | **IAM admin** (out-of-band) | `aws_iam_saml_provider` from Entra metadata — gives us its ARN |
-| Tier roles `…-emr-studio-basic` / `-intermediate` (AWS) | us (Terraform) | trust the SAML provider ARN via `AssumeRoleWithSAML` |
+| Tier roles `…-emr-studio-basic` / `-intermediate` (AWS) | us (Terraform) | trust the SAML provider ARN via `AssumeRoleWithSAML` (+ `sts:TagSession`, `sts:SetSourceIdentity`) |
 | Entra enterprise app (SAML) | **Entra admin** | claims + group assignment + relay state |
 
 Our Terraform (`tmt-dataplane/modules/emr-studio`) **never creates the SAML
@@ -67,6 +67,7 @@ role ARNs. Do it in this order:
 | `https://aws.amazon.com/SAML/Attributes/Role` | one value **per tier the user is entitled to**, format `"<role-arn>,<saml-provider-arn>"` — driven by group membership (see mapping) |
 | `https://aws.amazon.com/SAML/Attributes/RoleSessionName` | user UPN / email — **must be stable per user** (it becomes `aws:userId` → the Workspace `creatorUserId`, so a user keeps ownership across logins) |
 | `https://aws.amazon.com/SAML/Attributes/SourceIdentity` | user UPN / email — for CloudTrail attribution (the role trust allows `sts:SetSourceIdentity`) |
+| `https://aws.amazon.com/SAML/Attributes/PrincipalTag:email` | user UPN / email — becomes an ABAC **session tag** (the role trust allows `sts:TagSession`); IAM policies use `${aws:PrincipalTag/email}` to scope per-user resources, e.g. the notebook Snowflake-token secret ([NOTEBOOK_SNOWFLAKE_OIDC.md](NOTEBOOK_SNOWFLAKE_OIDC.md)) |
 | NameID | persistent, user UPN / email |
 | `https://aws.amazon.com/SAML/Attributes/SessionDuration` | optional, e.g. `3600` |
 
