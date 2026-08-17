@@ -28,6 +28,11 @@ export function TenantsPage() {
   const [pendingSuspend, setPendingSuspend] = useState<Tenant | null>(null);
   const [suspending, setSuspending] = useState(false);
 
+  const [pendingDelete, setPendingDelete] = useState<Tenant | null>(null);
+  const [deleteData, setDeleteData] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [retryingId, setRetryingId] = useState<string | null>(null);
+
   const load = async () => {
     setLoading(true);
     try {
@@ -103,6 +108,38 @@ export function TenantsPage() {
     }
   };
 
+  const retryProvisioning = async (t: Tenant) => {
+    setRetryingId(t.tenantId);
+    try {
+      await tenantsApi.retryProvisioning(t.tenantId);
+      await load();
+    } catch (err) {
+      setError(extractErrorMessage(err));
+    } finally {
+      setRetryingId(null);
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!pendingDelete) return;
+    setDeleting(true);
+    try {
+      await tenantsApi.remove(pendingDelete.tenantId, deleteData);
+      setPendingDelete(null);
+      setDeleteData(false);
+      await load();
+    } catch (err) {
+      // A partial teardown returns 502 with the resume instruction — surface
+      // it and keep the dialog open so "Delete" retries.
+      setError(extractErrorMessage(err));
+      setPendingDelete(null);
+      setDeleteData(false);
+      await load();
+    } finally {
+      setDeleting(false);
+    }
+  };
+
   const columns: Column<Tenant>[] = [
     { key: 'name', header: 'Tenant', render: (t) => (
       <div>
@@ -110,7 +147,19 @@ export function TenantsPage() {
         <p className="font-mono text-xs text-text-muted">{t.tenantId}</p>
       </div>
     ) },
-    { key: 'status', header: 'Status', render: (t) => <StatusBadge status={t.status} /> },
+    { key: 'status', header: 'Status', render: (t) => (
+      <div className="flex items-center gap-1.5">
+        <StatusBadge status={t.status} />
+        {t.status !== 'deleted' && t.provisioningStatus && t.provisioningStatus !== 'active' && (
+          <span title={t.provisioningError ?? undefined}>
+            <StatusBadge
+              status={t.provisioningStatus}
+              label={`provisioning ${t.provisioningStatus}`}
+            />
+          </span>
+        )}
+      </div>
+    ) },
     { key: 'quota', header: 'Compute Quota', render: (t) => `${t.computeQuotaVcpuHours.toLocaleString()} vCPU-hrs` },
     { key: 'frameworks', header: 'Frameworks', render: (t) => (t.allowedFrameworks ?? []).join(', ') },
     { key: 'createdAt', header: 'Created', render: (t) => formatDate(t.createdAt) },
@@ -118,22 +167,64 @@ export function TenantsPage() {
       key: 'actions',
       header: '',
       align: 'right',
-      render: (t) => (
-        <Button
-          variant={t.status === 'active' ? 'danger' : 'secondary'}
-          onClick={(e) => {
-            e.stopPropagation();
-            if (t.status === 'active') {
-              setPendingSuspend(t);
-            } else {
-              void reactivate(t);
-            }
-          }}
-          className="!px-3 !py-1.5 !text-xs"
-        >
-          {t.status === 'active' ? 'Suspend' : 'Reactivate'}
-        </Button>
-      ),
+      render: (t) => {
+        if (t.status === 'deleted') {
+          return <span className="text-xs text-text-muted">—</span>;
+        }
+        return (
+          <div className="flex items-center justify-end gap-2">
+            {t.provisioningStatus === 'failed' && (
+              <Button
+                variant="secondary"
+                loading={retryingId === t.tenantId}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void retryProvisioning(t);
+                }}
+                className="!px-3 !py-1.5 !text-xs"
+              >
+                Retry provisioning
+              </Button>
+            )}
+            {t.status === 'active' ? (
+              <Button
+                variant="danger"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setPendingSuspend(t);
+                }}
+                className="!px-3 !py-1.5 !text-xs"
+              >
+                Suspend
+              </Button>
+            ) : (
+              <>
+                <Button
+                  variant="secondary"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    void reactivate(t);
+                  }}
+                  className="!px-3 !py-1.5 !text-xs"
+                >
+                  Reactivate
+                </Button>
+                <Button
+                  variant="danger"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setDeleteData(false);
+                    setPendingDelete(t);
+                  }}
+                  className="!px-3 !py-1.5 !text-xs"
+                >
+                  Delete
+                </Button>
+              </>
+            )}
+          </div>
+        );
+      },
     },
   ];
 
@@ -221,6 +312,44 @@ export function TenantsPage() {
           </Field>
         </div>
       </Modal>
+
+      <ConfirmDialog
+        open={!!pendingDelete}
+        title="Delete tenant?"
+        description={
+          <div className="space-y-3">
+            <p>
+              This tears down{' '}
+              <span className="font-medium text-text-primary">{pendingDelete?.name}</span>
+              &apos;s dataplane resources (EMR Serverless application, execution role; the KMS
+              key gets a 30-day recovery window) and permanently marks the tenant deleted.
+              It cannot be reactivated — only a new tenant can replace it.
+            </p>
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                checked={deleteData}
+                onChange={(e) => setDeleteData(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                Also permanently delete the tenant&apos;s S3 artifacts
+                <span className="block text-xs text-text-muted">
+                  Off by default — model artifacts are usually retained for MRM/governance.
+                </span>
+              </span>
+            </label>
+          </div>
+        }
+        tone="danger"
+        confirmLabel={deleteData ? 'Delete tenant + data' : 'Delete tenant'}
+        busy={deleting}
+        onConfirm={() => void confirmDelete()}
+        onCancel={() => {
+          setPendingDelete(null);
+          setDeleteData(false);
+        }}
+      />
 
       <ConfirmDialog
         open={!!pendingSuspend}

@@ -2,7 +2,7 @@
 
 export type Role = 'PlatformAdmin' | 'TenantAdmin' | 'DataScientist' | 'MRM';
 
-export type TenantStatus = 'active' | 'suspended';
+export type TenantStatus = 'active' | 'suspended' | 'deleted';
 export type JobStatus = 'queued' | 'running' | 'succeeded' | 'failed' | 'cancelled';
 export type ComputeType = 'emr_serverless' | 'sagemaker';
 export type Framework = 'pytorch' | 'tensorflow' | 'sklearn' | 'xgboost';
@@ -41,6 +41,8 @@ export interface Tenant {
   sagemakerDomainId: string;
   executionRoleArn?: string;
   provisioningStatus?: ProvisioningStatus;
+  /** Last provisioning/deprovisioning failure — cleared on the next attempt. */
+  provisioningError?: string | null;
   s3BucketName: string;
   computeQuotaVcpuHours: number;
   allowedFrameworks: Framework[];

@@ -51,6 +51,19 @@ export const tenantsApi = {
     const { data } = await apiClient.post<Tenant>(`/tenants/${id}/reactivate`);
     return data;
   },
+  /** Re-drive provisioning for a pending/failed tenant (idempotent resume). */
+  async retryProvisioning(id: string): Promise<Tenant> {
+    const { data } = await apiClient.post<Tenant>(`/tenants/${id}/provision`);
+    return data;
+  },
+  /** Hard-delete: tears down dataplane resources, tombstones the record.
+   * Requires the tenant to be suspended. S3 artifacts kept unless deleteData. */
+  async remove(id: string, deleteData = false): Promise<Tenant> {
+    const { data } = await apiClient.delete<Tenant>(`/tenants/${id}`, {
+      params: { deleteData },
+    });
+    return data;
+  },
   async metrics(id: string): Promise<TenantMetrics> {
     const { data } = await apiClient.get<TenantMetrics>(`/tenants/${id}/metrics`);
     return data;
