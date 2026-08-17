@@ -32,12 +32,15 @@ module "backend" {
 
 Notes:
 
-- The task role includes `events:PutEvents` (tenant provisioning requests)
-  and `iam:PassRole` restricted to the per-tenant execution-role name pattern
-  — without the PassRole grant, real-mode job submission fails.
-- The provisioning event-bus NAME the app publishes to is derived from
-  `provisioning_event_bus_arn`, so the IAM grant and the publish target
-  always refer to the same bus (leave null for the account default bus).
+- The task role includes `iam:PassRole` restricted to the per-tenant
+  execution-role name pattern — without the PassRole grant, real-mode job
+  submission fails.
+- Tenant provisioning is direct boto3 through the dataplane **runtime role**
+  (no EventBridge): that role — owned by `tmt-dataplane` — needs
+  `kms:CreateKey/CreateAlias/DescribeKey/TagResource`,
+  `iam:CreateRole/GetRole/PutRolePolicy/TagRole` (boundary-conditioned; see
+  `TENANT_ROLE_PERMISSIONS_BOUNDARY_ARN`), and
+  `emr-serverless:CreateApplication/TagResource`.
 - Secrets/config are read from SSM Parameter Store / Secrets Manager under
   `ssm_parameter_prefix` (same paths as the README's AWS setup section).
 - Per-tenant compute (EMR Serverless applications, execution roles, KMS keys)

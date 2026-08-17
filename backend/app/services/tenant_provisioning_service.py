@@ -1,17 +1,37 @@
-"""Tenant dataplane provisioning handoff.
+"""Tenant dataplane provisioning — direct boto3 calls, no event pipeline.
 
-The API never creates dataplane infrastructure (EMR Serverless application,
-per-tenant execution role, KMS key, S3 prefix) at request time. Instead:
+Tenant creation provisions the per-tenant dataplane resources itself through
+``dataplane_client`` (the runtime role assumed with a ``tenantId`` session
+tag in the account split; plain backend credentials in single-account mode):
 
-- ``TENANT_PROVISIONING_MOCK_MODE=true`` (local dev): tenant creation is
-  self-provisioned with mock resource IDs and the tenant's S3 prefix marker,
-  and the tenant goes straight to ``provisioningStatus=active`` so the full
-  flow works with zero AWS accounts.
-- ``TENANT_PROVISIONING_MOCK_MODE=false`` (prod): tenant creation emits a
-  ``TenantProvisioningRequested`` event to EventBridge. The IaC pipeline in
-  the dataplane account instantiates the tenant module and reports the
-  resulting resource IDs back via ``PUT /tenants/{id}/provisioning``, which
-  flips the tenant to ``active``. Until then, job submission is rejected.
+1. **KMS key + alias** ``alias/ml-platform-snowflake-<tenant>`` — Snowflake
+   token encryption (matches ``KmsCipher``'s alias convention).
+2. **Execution role** ``ml-platform-tenant-<tenant>-exec`` — matches the
+   ``…-tenant-*-exec`` PassRole pattern already granted to the backend task
+   role; trusted by EMR Serverless + SageMaker; scoped to the tenant's S3
+   prefix and KMS key.
+3. **EMR Serverless application** — with the interactive endpoint enabled so
+   EMR Studio Workspaces can attach (see docs/EMR_STUDIO_LAUNCH.md §3).
+4. **S3 prefix marker** in the artifacts bucket (backend's own credentials —
+   S3 access is resource-policy based, see dataplane_service).
+
+Every step is **idempotent**: skipped when the tenant record already carries
+the resource id, and AlreadyExists races resolve by reading the existing
+resource — so a failed provision is safely re-driven via
+``POST /tenants/{id}/provision``. Failures set ``provisioningStatus=failed``
+with the error recorded on the tenant; job submission stays rejected until
+``active``. ``PUT /tenants/{id}/provisioning`` remains as a manual override
+for out-of-band-provisioned resources.
+
+``TENANT_PROVISIONING_MOCK_MODE=true`` (local dev): mock resource ids, the
+S3 prefix marker, straight to ``active`` — zero AWS accounts.
+
+Dataplane runtime-role permissions this needs (owned by ``tmt-dataplane``),
+beyond the job-path ABAC: ``kms:CreateKey/CreateAlias/DescribeKey/
+TagResource``, ``iam:CreateRole/GetRole/PutRolePolicy/TagRole`` (orgs with a
+permissions boundary typically allow CreateRole only when the boundary is
+attached — set ``TENANT_ROLE_PERMISSIONS_BOUNDARY_ARN``), and
+``emr-serverless:CreateApplication/TagResource``.
 """
 from __future__ import annotations
 
@@ -21,11 +41,19 @@ import logging
 from app.config import settings
 from app.db.client import make_boto3_client
 from app.db.models import ProvisioningStatus, Tenant
+from app.services.dataplane_service import dataplane_client
 
 logger = logging.getLogger("ml_platform.tenant_provisioning")
 
-EVENT_SOURCE = "ml-platform.tenants"
-EVENT_DETAIL_TYPE = "TenantProvisioningRequested"
+_PLATFORM_TAG = "ml-platform"
+
+
+def _tags(tenant_id: str) -> list:
+    """tenantId first (the ABAC key the runtime role scopes on) + platform."""
+    return [
+        {"Key": "tenantId", "Value": tenant_id},
+        {"Key": "platform", "Value": _PLATFORM_TAG},
+    ]
 
 
 class TenantProvisioningService:
@@ -33,16 +61,209 @@ class TenantProvisioningService:
         self.mock = settings.TENANT_PROVISIONING_MOCK_MODE
 
     def provision(self, tenant: Tenant, requested_by: str) -> Tenant:
-        """Kick off provisioning for a newly created tenant.
+        """Provision dataplane resources for ``tenant`` (idempotent).
 
-        Mutates and returns ``tenant`` with the appropriate provisioning
-        state; the caller persists it.
+        Mutates and returns ``tenant``; the caller persists it. Resource ids
+        are written onto the tenant as each step completes, so a partial
+        failure persists what exists and a retry resumes from there.
         """
         if self.mock:
             return self._mock_provision(tenant)
         tenant.provisioningStatus = ProvisioningStatus.PENDING.value
-        self._emit_provisioning_event(tenant, requested_by)
+        tenant.provisioningError = None
+        try:
+            self._ensure_kms_key(tenant)
+            self._ensure_execution_role(tenant)
+            self._ensure_emr_application(tenant)
+            tenant.s3BucketName = (
+                f"s3://{settings.S3_ARTIFACTS_BUCKET}/{tenant.tenantId}/"
+            )
+            self._ensure_s3_prefix(tenant.tenantId)
+            tenant.provisioningStatus = ProvisioningStatus.ACTIVE.value
+            logger.info(
+                "Provisioned tenant %s (requested by %s): app=%s role=%s",
+                tenant.tenantId,
+                requested_by,
+                tenant.emrApplicationId,
+                tenant.executionRoleArn,
+            )
+        except Exception as exc:
+            # Partial ids already set on the tenant are persisted by the
+            # caller; POST /tenants/{id}/provision re-drives from there.
+            logger.exception("Provisioning failed for tenant %s", tenant.tenantId)
+            tenant.provisioningStatus = ProvisioningStatus.FAILED.value
+            tenant.provisioningError = str(exc)[:500]
         return tenant
+
+    # ── Steps (each idempotent) ──────────────────────────────────────────
+
+    def _ensure_kms_key(self, tenant: Tenant) -> None:
+        if tenant.kmsKeyArn:
+            return
+        kms = dataplane_client("kms", tenant.tenantId, settings.KMS_ENDPOINT_URL)
+        alias = f"alias/ml-platform-snowflake-{tenant.tenantId}"
+        try:
+            resp = kms.describe_key(KeyId=alias)
+            tenant.kmsKeyArn = resp["KeyMetadata"]["Arn"]
+            return
+        except Exception:
+            pass  # NotFound → create
+        create_kwargs = {
+            "Description": f"ml-platform Snowflake-token key for tenant {tenant.tenantId}",
+            "Tags": [
+                {"TagKey": t["Key"], "TagValue": t["Value"]}
+                for t in _tags(tenant.tenantId)
+            ],
+        }
+        # Account split: the backend decrypts this key cross-account with its
+        # own credentials, which needs an explicit key-policy grant. The
+        # dataplane account id comes from the runtime role ARN (both are set
+        # together in split mode).
+        if settings.BACKEND_PRINCIPAL_ARN and settings.DATAPLANE_RUNTIME_ROLE_ARN:
+            dataplane_account = settings.DATAPLANE_RUNTIME_ROLE_ARN.split(":")[4]
+            create_kwargs["Policy"] = json.dumps(
+                {
+                    "Version": "2012-10-17",
+                    "Statement": [
+                        {
+                            "Sid": "AccountRoot",
+                            "Effect": "Allow",
+                            "Principal": {
+                                "AWS": f"arn:aws:iam::{dataplane_account}:root"
+                            },
+                            "Action": "kms:*",
+                            "Resource": "*",
+                        },
+                        {
+                            "Sid": "BackendUse",
+                            "Effect": "Allow",
+                            "Principal": {"AWS": settings.BACKEND_PRINCIPAL_ARN},
+                            "Action": [
+                                "kms:Encrypt",
+                                "kms:Decrypt",
+                                "kms:GenerateDataKey",
+                                "kms:DescribeKey",
+                            ],
+                            "Resource": "*",
+                        },
+                    ],
+                }
+            )
+        resp = kms.create_key(**create_kwargs)
+        key = resp["KeyMetadata"]
+        try:
+            kms.create_alias(AliasName=alias, TargetKeyId=key["KeyId"])
+        except Exception:
+            logger.warning(
+                "KMS alias %s could not be created (key %s still usable by ARN).",
+                alias,
+                key["KeyId"],
+                exc_info=True,
+            )
+        tenant.kmsKeyArn = key["Arn"]
+
+    def _ensure_execution_role(self, tenant: Tenant) -> None:
+        if tenant.executionRoleArn:
+            return
+        iam = dataplane_client("iam", tenant.tenantId)
+        role_name = f"ml-platform-tenant-{tenant.tenantId}-exec"
+        trust = {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Effect": "Allow",
+                    "Principal": {
+                        "Service": [
+                            "emr-serverless.amazonaws.com",
+                            "sagemaker.amazonaws.com",
+                        ]
+                    },
+                    "Action": "sts:AssumeRole",
+                }
+            ],
+        }
+        create_kwargs = {
+            "RoleName": role_name,
+            "AssumeRolePolicyDocument": json.dumps(trust),
+            "Description": f"ml-platform execution role for tenant {tenant.tenantId}",
+            "Tags": _tags(tenant.tenantId),
+        }
+        # Orgs commonly allow runtime iam:CreateRole ONLY with the org
+        # boundary attached (iam:PermissionsBoundary condition).
+        if settings.TENANT_ROLE_PERMISSIONS_BOUNDARY_ARN:
+            create_kwargs["PermissionsBoundary"] = (
+                settings.TENANT_ROLE_PERMISSIONS_BOUNDARY_ARN
+            )
+        try:
+            resp = iam.create_role(**create_kwargs)
+            role_arn = resp["Role"]["Arn"]
+        except Exception as exc:
+            if "EntityAlreadyExists" not in type(exc).__name__ and (
+                "EntityAlreadyExists" not in str(exc)
+            ):
+                raise
+            role_arn = iam.get_role(RoleName=role_name)["Role"]["Arn"]
+        bucket = settings.S3_ARTIFACTS_BUCKET
+        policy = {
+            "Version": "2012-10-17",
+            "Statement": [
+                {
+                    "Sid": "TenantPrefixRW",
+                    "Effect": "Allow",
+                    "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+                    "Resource": f"arn:aws:s3:::{bucket}/{tenant.tenantId}/*",
+                },
+                {
+                    "Sid": "TenantPrefixList",
+                    "Effect": "Allow",
+                    "Action": ["s3:ListBucket"],
+                    "Resource": f"arn:aws:s3:::{bucket}",
+                    "Condition": {
+                        "StringLike": {"s3:prefix": [f"{tenant.tenantId}/*"]}
+                    },
+                },
+                {
+                    "Sid": "TenantKmsUse",
+                    "Effect": "Allow",
+                    "Action": [
+                        "kms:Decrypt",
+                        "kms:Encrypt",
+                        "kms:GenerateDataKey",
+                        "kms:DescribeKey",
+                    ],
+                    "Resource": tenant.kmsKeyArn or "*",
+                },
+            ],
+        }
+        iam.put_role_policy(
+            RoleName=role_name,
+            PolicyName="tenant-scope",
+            PolicyDocument=json.dumps(policy),
+        )
+        tenant.executionRoleArn = role_arn
+
+    def _ensure_emr_application(self, tenant: Tenant) -> None:
+        if tenant.emrApplicationId:
+            return
+        emr = dataplane_client("emr-serverless", tenant.tenantId)
+        resp = emr.create_application(
+            name=f"ml-platform-{tenant.tenantId}",
+            releaseLabel=settings.EMR_RELEASE_LABEL,
+            type="SPARK",
+            # Required for EMR Studio Workspace attach (docs/EMR_STUDIO_LAUNCH.md
+            # §3 — "interactive endpoint enabled" is a hard dependency).
+            interactiveConfiguration={
+                "studioEnabled": True,
+                "livyEndpointEnabled": True,
+            },
+            # Same request retried (e.g. re-driven provision racing a timeout)
+            # returns the same application instead of a duplicate.
+            clientToken=f"ml-platform-{tenant.tenantId}",
+            tags={t["Key"]: t["Value"] for t in _tags(tenant.tenantId)},
+        )
+        tenant.emrApplicationId = resp["applicationId"]
+
+    # ── Mock mode ────────────────────────────────────────────────────────
 
     def _mock_provision(self, tenant: Tenant) -> Tenant:
         """Local dev: fill mock resource IDs and create the S3 prefix marker."""
@@ -58,7 +279,7 @@ class TenantProvisioningService:
     def _ensure_s3_prefix(self, tenant_id: str) -> None:
         """Create the shared bucket (LocalStack) and the tenant's prefix marker
         so the S3 browser has somewhere to land. Best-effort — never fails
-        tenant creation."""
+        tenant provisioning."""
         bucket = settings.S3_ARTIFACTS_BUCKET
         client = make_boto3_client("s3", settings.S3_ENDPOINT_URL)
         try:
@@ -77,42 +298,8 @@ class TenantProvisioningService:
             client.put_object(Bucket=bucket, Key=f"{tenant_id}/.keep", Body=b"")
         except Exception:
             logger.warning(
-                "Could not create S3 prefix for tenant %s (mock provisioning).",
+                "Could not create S3 prefix for tenant %s.",
                 tenant_id,
-                exc_info=True,
-            )
-
-    def _emit_provisioning_event(self, tenant: Tenant, requested_by: str) -> None:
-        """Publish the provisioning request to EventBridge (best-effort).
-
-        On failure the tenant simply stays ``pending``; a PlatformAdmin can
-        re-drive the pipeline manually and complete via the write-back
-        endpoint.
-        """
-        detail = {
-            "tenantId": tenant.tenantId,
-            "name": tenant.name,
-            "computeQuotaVcpuHours": tenant.computeQuotaVcpuHours,
-            "allowedFrameworks": tenant.allowedFrameworks,
-            "requestedBy": requested_by,
-        }
-        try:
-            client = make_boto3_client("events")
-            client.put_events(
-                Entries=[
-                    {
-                        "Source": EVENT_SOURCE,
-                        "DetailType": EVENT_DETAIL_TYPE,
-                        "Detail": json.dumps(detail),
-                        "EventBusName": settings.TENANT_PROVISIONING_EVENT_BUS,
-                    }
-                ]
-            )
-        except Exception:
-            logger.warning(
-                "Failed to emit %s event for tenant %s — tenant stays pending.",
-                EVENT_DETAIL_TYPE,
-                tenant.tenantId,
                 exc_info=True,
             )
 

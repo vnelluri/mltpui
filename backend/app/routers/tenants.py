@@ -59,7 +59,7 @@ class TenantUpdateRequest(BaseModel):
 
 
 class ProvisioningWriteBackRequest(BaseModel):
-    """Result reported by the dataplane provisioning pipeline."""
+    """Manually recorded (out-of-band-provisioned) dataplane resources."""
 
     status: str  # "active" | "failed"
     emrApplicationId: Optional[str] = None
@@ -98,10 +98,11 @@ def create_tenant(
         computeQuotaVcpuHours=body.computeQuotaVcpuHours,
         allowedFrameworks=body.allowedFrameworks,
     )
-    # Dataplane resources are never created at request time: in mock mode the
-    # tenant is self-provisioned with mock IDs; otherwise a provisioning event
-    # is emitted and the tenant stays "pending" until the IaC pipeline reports
-    # back via PUT /tenants/{id}/provisioning.
+    # Provisioning is synchronous and idempotent: mock mode fills mock IDs;
+    # real mode creates the dataplane resources directly via boto3 through
+    # the runtime role (KMS key, execution role, EMR Serverless app, S3
+    # prefix). Failures mark the tenant failed with the error recorded —
+    # POST /tenants/{id}/provision retries from whatever partially exists.
     tenant = tenant_provisioning_service.provision(tenant, requested_by=user.userId)
     _tenant_repo.create(tenant)
     audit_service.record(
@@ -116,6 +117,39 @@ def create_tenant(
     return tenant
 
 
+@router.post("/{tenant_id}/provision", response_model=Tenant)
+def retry_provisioning(
+    tenant_id: str,
+    request: Request,
+    user: CurrentUser = Depends(require_role("PlatformAdmin")),
+) -> Tenant:
+    """Re-drive provisioning for a pending/failed tenant.
+
+    Idempotent: steps whose resource id is already on the tenant record are
+    skipped, so this resumes from wherever the last attempt stopped.
+    """
+    tenant = _tenant_repo.get(tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found.")
+    if tenant.provisioningStatus == ProvisioningStatus.ACTIVE.value:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Tenant is already provisioned.",
+        )
+    tenant = tenant_provisioning_service.provision(tenant, requested_by=user.userId)
+    updated = _tenant_repo.update(tenant)
+    audit_service.record(
+        user=user,
+        action="tenant.provision_retry",
+        resource_type="Tenant",
+        resource_id=tenant_id,
+        tenant_id=tenant_id,
+        details={"provisioningStatus": tenant.provisioningStatus},
+        request=request,
+    )
+    return updated
+
+
 @router.put("/{tenant_id}/provisioning", response_model=Tenant)
 def complete_provisioning(
     tenant_id: str,
@@ -123,8 +157,9 @@ def complete_provisioning(
     request: Request,
     user: CurrentUser = Depends(require_role("PlatformAdmin")),
 ) -> Tenant:
-    """Write-back endpoint for the dataplane provisioning pipeline (also
-    usable by a PlatformAdmin to record manually provisioned resources)."""
+    """Manual override: record out-of-band-provisioned resources on a tenant
+    (provisioning is normally done directly by POST /tenants — this endpoint
+    remains for resources created outside the platform)."""
     if body.status not in {
         ProvisioningStatus.ACTIVE.value,
         ProvisioningStatus.FAILED.value,

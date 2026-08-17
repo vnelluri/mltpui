@@ -72,7 +72,7 @@ Browser (SPA) ──HTTPS──► ALB ──► Frontend (nginx, static)
                                       ├─► EMR Serverless / SageMaker (job submit)
                                       ├─► S3 (artifacts, presigned uploads)
                                       ├─► KMS + Secrets Manager (tokens)
-                                      └─► EventBridge (tenant provisioning)
+                                      └─► KMS / IAM / EMR Serverless (tenant provisioning)
 ```
 
 Every request passes through `get_current_user`
@@ -211,13 +211,15 @@ user's tier. Per-tenant Studios are a later release.
 
 ### 3.7 Tenant provisioning
 
-Creating a tenant in the control plane emits an event to **EventBridge**
-(`tenant_provisioning_service.py`, `events:PutEvents`). The
-`tmt-dataplane` reconcile pipeline consumes it and creates the tenant's
-dataplane resources: EMR Serverless application, execution role, and KMS
-key (tagged `platform=<name_prefix>` so control-plane IAM conditions cover
-them without re-applying Terraform). Until reconciliation completes, job
-submission for that tenant fails with `TenantNotProvisionedError`.
+Creating a tenant provisions its dataplane resources **directly via boto3**
+(`tenant_provisioning_service.py`), through the dataplane runtime role
+assumed with a `tenantId` session tag: the per-tenant KMS key, the
+execution role (`ml-platform-tenant-{id}-exec`), the EMR Serverless
+application (interactive endpoint enabled — the EMR Studio attach
+dependency), and the S3 prefix marker. Everything is tagged `tenantId` +
+`platform=ml-platform` so IAM ABAC conditions cover the new resources
+immediately. Until provisioning succeeds, job submission for that tenant
+fails with `TenantNotProvisionedError`.
 
 ### 3.8 Data model
 
@@ -229,55 +231,45 @@ other short-lived records.
 ### 3.9 Tenant lifecycle
 
 A tenant is a **control-plane record first, dataplane infrastructure
-second**, and the two are decoupled by an event. §3.7 covers the emit
-side; this expands the full create → provision → active → suspend flow.
+second**. §3.7 names the resources; this expands the full
+create → provision → active → suspend flow.
 
-**Design principle — the event triggers, but the reconcile is
-declarative.** The `TenantProvisioningRequested` event is only a *nudge*;
-the dataplane pipeline's source of truth is the platform API's tenant
-list, which it reads and `terraform apply`s idempotently. A lost event
-just delays provisioning — the next run (scheduled or manual) heals it.
+**Design principle — synchronous, idempotent steps instead of a
+pipeline.** Each resource is created only when the tenant record doesn't
+already carry its id, and ids are written onto the record as steps
+complete. A failure marks the tenant `failed` with the error recorded
+(`Tenant.provisioningError`); `POST /tenants/{id}/provision` re-drives
+provisioning, resuming from whatever already exists. There is no event
+bus and no reconcile pipeline in the tenant path.
 
 ```
-CONTROL PLANE (tmt)                         DATAPLANE (tmt-dataplane)
-──────────────────                          ─────────────────────────
 PlatformAdmin
   POST /tenants  (routers/tenants.py)
-    │ validate tenantId slug (≤30 chars)
-    │ 409 if exists
-    │ write Tenant record (status=active)
+    │ validate tenantId slug (≤30 chars); 409 if exists
     ▼
-  tenant_provisioning_service.provision()
-    ├─ MOCK: fill mock IDs, S3 prefix,
-    │        provisioningStatus=active ──► done (no AWS)
-    └─ PROD: provisioningStatus=pending
-             emit TenantProvisioningRequested ─► EventBridge bus
-                                                    │
-                                                    ▼  detail-type match
-                                                 CodeBuild reconcile
-                                                 (account-baseline rule)
-                                                    │
-             GET /tenants?pageSize=500 ◄───────────┤ read DESIRED state
-                                                    │ (not the event payload)
-                                                    ▼
-                                                 terraform apply
-                                                 module.tenant (for_each)
-                                                    · EMR Serverless app
-                                                    · exec role …-tenant-{id}-exec
-                                                    · per-tenant KMS key
-                                                    · S3 prefix marker
-                                                    │
-    Tenant → active ◄── PUT /tenants/{id}/ ◄────────┘ write-back real IDs
-    (job submission now allowed)  provisioning       (emr/role/kms/s3)
+  tenant_provisioning_service.provision()        (synchronous, idempotent)
+    ├─ MOCK: fill mock IDs, S3 prefix, provisioningStatus=active
+    └─ PROD: via dataplane_client (runtime role + tenantId session tag)
+         1. KMS key + alias ml-platform-snowflake-{id}    → kmsKeyArn
+         2. exec role ml-platform-tenant-{id}-exec        → executionRoleArn
+            (org permissions boundary attached when
+             TENANT_ROLE_PERMISSIONS_BOUNDARY_ARN is set)
+         3. EMR Serverless app (interactive endpoint on)  → emrApplicationId
+         4. S3 prefix marker (backend credentials)        → s3BucketName
+         ├─ all steps ok → provisioningStatus=active  (jobs allowed)
+         └─ any failure  → provisioningStatus=failed + provisioningError
+                           POST /tenants/{id}/provision resumes from
+                           the first missing resource
 ```
 
 **States** (`Tenant.provisioningStatus`, `Tenant.status`):
 
 | Transition | Trigger | Effect |
 |---|---|---|
-| create → `pending` | `POST /tenants` (prod mode) | Record exists; **job submission rejected** (`TenantNotProvisionedError`) |
-| create → `active` | `POST /tenants` (mock mode) | Self-provisioned with mock IDs; no AWS |
-| `pending` → `active` | `PUT /tenants/{id}/provisioning` write-back | Real EMR/role/KMS/S3 IDs recorded; jobs allowed |
+| create → `active` | `POST /tenants` (mock, or prod success) | Resource ids recorded; jobs allowed |
+| create → `failed` | a provisioning step failed | Partial ids persisted; **job submission rejected** (`TenantNotProvisionedError`) |
+| `failed`/`pending` → `active` | `POST /tenants/{id}/provision` retry | Resumes idempotently — existing resources are skipped |
+| any → `active` | `PUT /tenants/{id}/provisioning` manual write-back | Records out-of-band-provisioned resource ids without running the direct path |
 | `active` → `suspended` | `POST /tenants/{id}/suspend` | **Dataplane untouched** — jobs blocked at the API layer, resources persist |
 | `suspended` → `active` | `POST /tenants/{id}/reactivate` | Unblocks; no re-provisioning needed |
 
@@ -287,14 +279,10 @@ three independent places that must agree: the Entra group names
 role name (`ml-platform-tenant-{tenantId}-exec`). The ≤30-char cap
 (`_TENANT_ID_RE` in `routers/tenants.py`) exists so that role name stays
 under IAM's 64-char limit — a longer slug would validate here and then
-fail `terraform apply` in the pipeline.
+fail `iam:CreateRole` at provisioning time.
 
-**Write-back is idempotent and self-healing** — `provision-tenants.sh`
-re-PUTs any tenant whose stored record doesn't match the Terraform
-outputs, not just `pending` ones (so a field added later — e.g. `kmsKeyArn`
-with the account split — is backfilled on the next reconcile). See
-`tmt-dataplane/scripts/provision-tenants.sh` and `modules/tenant`. EMR
-Studio is **platform-global**, not part of this per-tenant loop (§3.6).
+EMR Studio is **platform-global**, not part of this per-tenant path
+(§3.6).
 
 ## 4. Production topology
 
@@ -304,26 +292,26 @@ Production runs across **two AWS accounts**:
 ┌─ Control-plane account (tmt monorepo) ──┐   ┌─ Dataplane account (tmt-dataplane) ─────┐
 │                                         │   │  account-baseline (applied once):       │
 │  ALB ─► Frontend (ECS Fargate, nginx)   │   │   · S3 artifacts bucket + CMK           │
-│      └► Backend  (ECS Fargate :8000)    │──►│   · provisioning EventBridge bus        │
-│                                         │   │   · dataplane-runtime role (ABAC)       │
-│  DynamoDB (single table)                │   │   · reconcile pipeline (CodeBuild)      │
-│  SSM Parameter Store  (/ml-platform/*)  │   │   · per-job token secrets               │
-│  Secrets Manager (Snowflake OAuth)      │   │   · EMR Studio + basic/intermediate     │
-│  CloudWatch Logs (/ecs/*-backend)       │   │     tier roles (IAM auth mode)          │
-│                                         │   │  Per tenant (reconcile loop):           │
+│      └► Backend  (ECS Fargate :8000)    │──►│   · dataplane-runtime role (ABAC)       │
+│                                         │   │   · per-job token secrets               │
+│  DynamoDB (single table)                │   │   · EMR Studio + basic/intermediate     │
+│  SSM Parameter Store  (/ml-platform/*)  │   │     tier roles (IAM auth mode)          │
+│  Secrets Manager (Snowflake OAuth)      │   │  Per tenant (created by the backend     │
+│  CloudWatch Logs (/ecs/*-backend)       │   │  via the runtime role at POST /tenants):│
 │                                         │   │   · EMR Serverless application          │
 │                                         │   │   · execution role (…-tenant-*-exec)    │
 │                                         │   │   · tenant KMS key                      │
 └─────────────────────────────────────────┘   └─────────────────────────────────────────┘
     ▲ Cognito (SAML ← Azure AD)         backend → dataplane (cross-account):
-                                        PutEvents to the bus, AssumeRole the runtime
-                                        role (+tenantId tag), and S3/KMS on the
-                                        artifacts bucket by resource policy. (The
-                                        Studio tier roles are assumed by USERS via
+                                        AssumeRole the runtime role (+tenantId
+                                        tag) for jobs, secrets AND tenant
+                                        provisioning; S3/KMS on the artifacts
+                                        bucket by resource policy. (The Studio
+                                        tier roles are assumed by USERS via
                                         SAML federation, never by the backend.)
-                                        The artifacts bucket, provisioning bus,
-                                        and per-job secrets all live in the DATAPLANE
-                                        account; the backend reaches them cross-account.
+                                        The artifacts bucket and per-job secrets
+                                        live in the DATAPLANE account; the
+                                        backend reaches them cross-account.
 ```
 
 A **single-account deployment** is also supported: leave
@@ -360,10 +348,11 @@ everything in `tmt-dataplane`.
 monorepo. It moved there because, with IAM mode the default, that is where it
 belongs:
 
-- `tmt-dataplane` is not only a per-tenant reconcile loop — its root also
-  applies `account-baseline`, a **global, applied-once-per-account** stack
-  (artifacts bucket, provisioning bus, the `dataplane-runtime` role). The
-  Studio's applied-once-global lifecycle fits `account-baseline` exactly.
+- `tmt-dataplane`'s root applies `account-baseline`, a **global,
+  applied-once-per-account** stack (artifacts bucket, the
+  `dataplane-runtime` role). The Studio's applied-once-global lifecycle
+  fits `account-baseline` exactly. (Per-tenant resources are no longer a
+  pipeline concern — the backend creates them directly, §3.7.)
 - All its resources are dataplane-account (Studio, tier roles, SGs), next to
   the EMR Serverless apps they attach to, and its inputs are dataplane-side
   values: `saml_provider_arn` (the admin-created SAML provider the tier roles
@@ -381,7 +370,7 @@ The control-plane backend **consumes** the Studio (deep-links its access URL,
 §3.6) but never applies it — in both auth modes AWS's hosted sign-in flow
 authenticates the user, and the backend makes no EMR Studio API call and
 assumes no Studio role. Costs borne on the
-`tmt-dataplane` side: the reconcile CodeBuild role gained EMR-Studio +
+`tmt-dataplane` side: its `account-baseline` CI/CD role gained EMR-Studio +
 studio-IAM-role + SG create permissions, and the Studio's roles get KMS use on
 the artifacts CMK. Historically the module lived here and the backend pipeline
 applied it (its `url` output fed control-plane SSM); IAM mode removed that SSM
@@ -406,9 +395,12 @@ Defined in `backend/iac/main.tf`; the important grants:
 - **iam:PassRole** — only roles matching
   `tenant_execution_role_arn_pattern`, and only to EMR Serverless /
   SageMaker. Without this, real-mode job submission fails.
-- **events:PutEvents** — the tenant-provisioning event bus.
 - **sts:AssumeRole + TagSession** — the dataplane runtime role (split mode
-  only).
+  only). Tenant provisioning ALSO goes through that role, so its policy
+  (owned by `tmt-dataplane`) needs `kms:CreateKey/CreateAlias`,
+  `iam:CreateRole/PutRolePolicy` (boundary-conditioned — see
+  `TENANT_ROLE_PERMISSIONS_BOUNDARY_ARN`), and
+  `emr-serverless:CreateApplication` beyond the job-path ABAC.
 
 ### 4.3 Configuration injection
 
@@ -458,7 +450,7 @@ paths** with the AWS boundary swapped out:
 | Auth | `AUTH_MODE=dev` synthetic user from `DEV_USER_*` | Cognito ID token (Azure AD SAML), `custom:groups` claim |
 | DynamoDB / S3 / STS / KMS / Secrets Manager | LocalStack (`:4566`) | Real AWS |
 | EMR / SageMaker / Snowflake | In-process `*_MOCK_MODE=true` | Real services |
-| Tenant provisioning | `TENANT_PROVISIONING_MOCK_MODE=true` | EventBridge → `tmt-dataplane` |
+| Tenant provisioning | `TENANT_PROVISIONING_MOCK_MODE=true` | direct boto3 via the dataplane runtime role |
 | Config | `.env` (from `.env.example`) | SSM + Secrets Manager injection |
 | Serving | uvicorn `--reload` / Vite HMR via bind mounts | uvicorn / nginx behind ALB |
 

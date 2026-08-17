@@ -206,12 +206,14 @@ are the deferred fix.
 > user's browser, under the user's own identity. Launch only points at access —
 > the notebook session and compute run entirely in the dataplane.
 
-### Two dependencies this repo does not enforce
+### Two dependencies to keep in mind
 
 - **Interactive endpoint on the EMR Serverless apps.** A Workspace can only
   attach to an application with its interactive endpoint enabled
-  (`interactiveConfiguration` / Livy). The `tmt-dataplane` tenant module creates
-  the apps — that flag must be set there, or attach silently offers nothing.
+  (`interactiveConfiguration` / Livy). Tenant provisioning
+  (`tenant_provisioning_service.py`) creates the apps with
+  `studioEnabled`/`livyEndpointEnabled` on — apps created out-of-band must
+  set the flag too, or attach silently offers nothing.
 - **Same VPC/subnet reachability.** The Studio Engine SG and each EMR Serverless
   application's network config must sit in subnets that can reach each other on
   18888. Both are in the dataplane account, so line up the `subnet_ids` passed
@@ -248,9 +250,9 @@ collapse into one account.
 - **SSM `/ml-platform/emr/studio-url` written** from the module's `url` output
   (root `emr_studio_url`), and `EMR_AUTH_MODE=IAM` on the backend. The prod
   boot-guard refuses to start if `EMR_STUDIO_URL` is unset (both modes).
-- **At least one tenant provisioned** via the `tmt-dataplane` reconcile pipeline
-  (with its EMR Serverless app's **interactive endpoint enabled**) — otherwise
-  there is nothing to attach a Workspace to.
+- **At least one tenant provisioned** (`POST /tenants` — the backend creates
+  its EMR Serverless app directly, **interactive endpoint enabled**) —
+  otherwise there is nothing to attach a Workspace to.
 
 ### SSO mode (alternative)
 

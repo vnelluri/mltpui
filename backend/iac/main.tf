@@ -20,17 +20,6 @@ locals {
   # parameter would be a required-but-unused dependency.
   split_enabled = var.dataplane_runtime_role_arn != null
 
-  # The app publishes provisioning events by bus NAME; IAM below grants by
-  # ARN. Deriving the name from the same ARN keeps them in lockstep — a
-  # custom bus in the variable previously left the app publishing to
-  # "default", which the IAM grant then denied (and the app swallows
-  # publish errors best-effort, so tenants just sat pending).
-  provisioning_event_bus_name = (
-    var.provisioning_event_bus_arn == null
-    ? "default"
-    : element(split("/", var.provisioning_event_bus_arn), 1)
-  )
-
   # SSM-backed config injected as container secrets (matches app/config.py).
   ssm_secrets = merge(
     {
@@ -60,7 +49,6 @@ locals {
       SAGEMAKER_MOCK_MODE              = "false"
       SNOWFLAKE_MOCK_MODE              = "false"
       TENANT_PROVISIONING_MOCK_MODE    = "false"
-      TENANT_PROVISIONING_EVENT_BUS    = local.provisioning_event_bus_name
       PLATFORM_API_BASE_URL            = var.platform_api_base_url
       SNOWFLAKE_OAUTH_INTEGRATION_NAME = "ml_platform_oauth"
       SNOWFLAKE_DEFAULT_WAREHOUSE      = "COMPUTE_WH"
@@ -218,17 +206,6 @@ data "aws_iam_policy_document" "task" {
       variable = "iam:PassedToService"
       values   = ["emr-serverless.amazonaws.com", "sagemaker.amazonaws.com"]
     }
-  }
-
-  statement {
-    sid     = "TenantProvisioningEvents"
-    actions = ["events:PutEvents"]
-    resources = [
-      coalesce(
-        var.provisioning_event_bus_arn,
-        "arn:aws:events:${var.region}:${local.account_id}:event-bus/default"
-      )
-    ]
   }
 
   # Account split: EMR and job-secret operations go through the dataplane

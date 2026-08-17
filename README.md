@@ -293,13 +293,14 @@ ARN only, TTL-bound, deleted after the job) — never as plaintext env vars.
 - [ ] Create a real AWS KMS key and set `KMS_SNOWFLAKE_KEY_ARN` (the local
       `setup_local_kms.py` step is replaced by real KMS provisioning).
 - [ ] Run `setup_snowflake_integration.sql` in Snowflake.
-- [ ] Set `TENANT_PROVISIONING_MOCK_MODE=false` and stand up the tenant
-      provisioning pipeline: an EventBridge rule on
-      `ml-platform.tenants / TenantProvisioningRequested` that runs your IaC
-      tenant module (per-tenant EMR Serverless application with a
-      `maximumCapacity` matching the tenant quota, per-tenant execution role
-      scoped to `s3://<bucket>/<tenantId>/*`, S3 prefix) and reports back via
-      `PUT /tenants/{id}/provisioning`. Job submission is rejected until a
+- [ ] Set `TENANT_PROVISIONING_MOCK_MODE=false` and grant the dataplane
+      runtime role the provisioning permissions (`kms:CreateKey/CreateAlias`,
+      `iam:CreateRole/PutRolePolicy` — boundary-conditioned, set
+      `TENANT_ROLE_PERMISSIONS_BOUNDARY_ARN` — and
+      `emr-serverless:CreateApplication`): `POST /tenants` then creates the
+      per-tenant EMR Serverless application (interactive endpoint enabled),
+      execution role scoped to `s3://<bucket>/<tenantId>/*`, KMS key, and S3
+      prefix directly via boto3. Job submission is rejected until a
       tenant's provisioning is `active`.
 - [ ] Fill in `SAGEMAKER_DOMAIN_ID` and `SAGEMAKER_TRAINING_IMAGE` (execution
       roles and EMR applications are per-tenant — provisioned by the pipeline,
@@ -374,8 +375,8 @@ ARN only, TTL-bound, deleted after the job) — never as plaintext env vars.
    write CloudWatch Logs) and per-service **task roles**:
    - Backend task role: DynamoDB (single table + GSIs), S3 artifacts bucket, KMS
      (Snowflake key: encrypt/decrypt), Secrets Manager (job-token prefix),
-     EMR Serverless, SageMaker, STS, EventBridge `events:PutEvents` (tenant
-     provisioning requests).
+     EMR Serverless, SageMaker, STS (tenant provisioning goes through the
+     assumed dataplane runtime role, not this task role).
    - Frontend task role: minimal (static serving only).
 
 5. **SSM Parameter Store / Secrets Manager** — create the parameters referenced
@@ -459,8 +460,9 @@ under `infrastructure/ecs/` has been removed).
 | `EMR_MOCK_MODE` | Return fake EMR job runs / Studio URLs | `true` | `false` |
 | `SAGEMAKER_DOMAIN_ID` | SageMaker Studio domain | *(blank)* | `d-abc123` |
 | `SAGEMAKER_TRAINING_IMAGE` | Training container image for SageMaker jobs | *(blank)* | `…dkr.ecr…/training:latest` |
-| `TENANT_PROVISIONING_MOCK_MODE` | Self-provision mock tenant resources (local) vs EventBridge handoff to the IaC pipeline (prod) | `true` | `false` |
-| `TENANT_PROVISIONING_EVENT_BUS` | EventBridge bus for provisioning requests | `default` | *(dataplane bus ARN)* |
+| `TENANT_PROVISIONING_MOCK_MODE` | Self-provision mock tenant resources (local) vs direct boto3 creation via the dataplane runtime role (prod) | `true` | `false` |
+| `TENANT_ROLE_PERMISSIONS_BOUNDARY_ARN` | Permissions boundary attached to created tenant execution roles | *(blank)* | *(org boundary ARN)* |
+| `BACKEND_PRINCIPAL_ARN` | Backend task role granted use of each tenant KMS key (account split) | *(blank)* | *(backend task role ARN)* |
 | `DATAPLANE_RUNTIME_ROLE_ARN` | Dataplane runtime role for the account split (blank = single-account) | *(blank)* | `arn:aws:iam::<dataplane>:role/ml-platform-dataplane-runtime` |
 | `STS_ENDPOINT_URL` | STS endpoint (LocalStack only) | *(blank)* | *(blank)* |
 | `SAGEMAKER_MOCK_MODE` | Return fake SageMaker jobs/URLs | `true` | `false` |
@@ -634,9 +636,9 @@ Explore every endpoint interactively at **http://localhost:8000/docs**.
     └── iac/                        # Terraform module: frontend ECS service
 ```
 
-**Companion repository — `tmt-dataplane`:** per-tenant compute provisioning
-for the dataplane AWS account (EMR Serverless applications, tenant execution
-roles, KMS keys, the provisioning EventBridge bus + CodeBuild reconcile
-pipeline). Deployed by that account's own pipeline; this repo's backend talks
-to it via `TENANT_PROVISIONING_EVENT_BUS` and, in the account split,
-`DATAPLANE_RUNTIME_ROLE_ARN`.
+**Companion repository — `tmt-dataplane`:** the dataplane account's global
+layer (`account-baseline`: artifacts bucket + CMK, the dataplane runtime
+role, EMR Studio + tier roles). Deployed by that account's own pipeline.
+Per-tenant resources (EMR Serverless app, execution role, KMS key) are
+created directly by this repo's backend through the runtime role
+(`DATAPLANE_RUNTIME_ROLE_ARN`) at `POST /tenants`.

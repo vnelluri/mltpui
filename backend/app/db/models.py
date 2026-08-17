@@ -50,8 +50,9 @@ class TenantStatus(str, Enum):
 
 class ProvisioningStatus(str, Enum):
     """Lifecycle of a tenant's dataplane resources (EMR Serverless app,
-    execution role, S3 prefix, KMS key). Provisioned by the out-of-band IaC
-    pipeline — the API only records the outcome via the write-back endpoint."""
+    execution role, S3 prefix, KMS key). Provisioned directly by the backend
+    via boto3 through the dataplane runtime role (tenant_provisioning_service);
+    the write-back endpoint remains as a manual override."""
 
     PENDING = "pending"
     ACTIVE = "active"
@@ -131,9 +132,11 @@ class Tenant(BaseModel):
     # same-account alias convention still applies.
     kmsKeyArn: Optional[str] = None
     # Defaults to ACTIVE so tenant records written before this field existed
-    # keep working; the create-tenant flow sets PENDING explicitly until the
-    # provisioning pipeline reports back.
+    # keep working; the create-tenant flow sets PENDING explicitly while
+    # provisioning runs.
     provisioningStatus: str = ProvisioningStatus.ACTIVE.value
+    # Last provisioning failure (truncated) — cleared on the next attempt.
+    provisioningError: Optional[str] = None
     s3BucketName: Optional[str] = None
     computeQuotaVcpuHours: int = 1000
     allowedFrameworks: List[str] = Field(

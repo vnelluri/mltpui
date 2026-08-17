@@ -27,12 +27,12 @@ cloud "AWS Account (control plane)" {
   [S3\nml-platform-artifacts] as s3
   [EMR Serverless] as emr
   [SageMaker Training] as sgm
-  [EventBridge\n(tenant provisioning)] as evb
+  [IAM\n(tenant exec roles)] as tiam
   [STS\n(cross-account ABAC)] as sts
 }
 
 cloud "Snowflake" {
-  [Snowflake OAuth\n(RFC 8693 token exchange)] as sf
+  [Snowflake\n(External OAuth trusts Entra)] as sf
 }
 
 user --> spa
@@ -49,9 +49,9 @@ be --> sm : run-token transit to jobs
 be --> s3 : presigned URLs
 be --> emr : submit / poll jobs
 be --> sgm : training jobs
-be --> evb : TenantProvisioningRequested
-be --> sts : assume dataplane role
-be <..> sf : exchange Cognito ID token\nfor Snowflake token
+be --> tiam : tenant provisioning\n(create exec role via runtime role)
+be --> sts : assume dataplane role\n(jobs + tenant provisioning)
+be <..> sf : Entra-issued OAuth token\n(auth-code + refresh at Entra)
 
 note bottom of be
   Auth per request: verify ID-token signature (RS256, JWKS),

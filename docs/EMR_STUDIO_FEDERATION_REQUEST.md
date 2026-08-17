@@ -115,7 +115,7 @@ Role claim value, intermediate tier:  <intermediate-role-arn>,<saml-provider-arn
 
 ## Notes / caveats
 
-- **The IAM admin owns the SAML provider.** Our reconcile pipeline has no
+- **The IAM admin owns the SAML provider.** Our pipeline/runtime roles have no
   `iam:*SAMLProvider` permission by design — the same class of block that pushed
   us off SSO (`sso:CreateApplication`) could deny `iam:CreateSAMLProvider`, and
   it's a sensitive account-global resource. We only reference its ARN.

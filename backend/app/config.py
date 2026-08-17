@@ -132,15 +132,24 @@ class Settings(BaseSettings):
     DATAPLANE_RUNTIME_ROLE_ARN: Optional[str] = None
     STS_ENDPOINT_URL: Optional[str] = None  # LocalStack/moto only
 
-    # ── Tenant provisioning (dataplane resources via IaC pipeline) ──────────
+    # ── Tenant provisioning (direct boto3 into the dataplane) ───────────────
     # true (local dev): tenant creation self-provisions mock resource IDs and
     #   the tenant S3 prefix, and flips straight to provisioningStatus=active.
-    # false (prod): tenant creation emits a TenantProvisioningRequested event
-    #   to EventBridge; the IaC pipeline creates the EMR app / execution role /
-    #   KMS key / S3 prefix in the dataplane account and reports back via
-    #   PUT /tenants/{id}/provisioning.
+    # false (prod): tenant creation provisions the dataplane resources
+    #   directly (KMS key, execution role, EMR Serverless app, S3 prefix)
+    #   through the dataplane runtime role — see tenant_provisioning_service.
+    #   Failures mark the tenant failed; POST /tenants/{id}/provision retries.
     TENANT_PROVISIONING_MOCK_MODE: bool = True
-    TENANT_PROVISIONING_EVENT_BUS: str = "default"
+    # EMR Serverless release for newly provisioned tenant applications.
+    EMR_RELEASE_LABEL: str = "emr-7.5.0"
+    # Permissions boundary to attach to created tenant execution roles.
+    # Orgs commonly allow runtime iam:CreateRole ONLY on the condition that
+    # this boundary is attached — set it to the org's boundary ARN.
+    TENANT_ROLE_PERMISSIONS_BOUNDARY_ARN: Optional[str] = None
+    # Account split only: the backend task-role ARN, granted use of each
+    # tenant KMS key in its key policy (the backend reaches KMS with its own
+    # credentials cross-account — see dataplane_service docstring).
+    BACKEND_PRINCIPAL_ARN: Optional[str] = None
 
     # ── Snowflake OAuth ─────────────────────────────────────────────────────
     SNOWFLAKE_ACCOUNT: Optional[str] = None
