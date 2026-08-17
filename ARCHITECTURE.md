@@ -272,6 +272,15 @@ PlatformAdmin
 | any → `active` | `PUT /tenants/{id}/provisioning` manual write-back | Records out-of-band-provisioned resource ids without running the direct path |
 | `active` → `suspended` | `POST /tenants/{id}/suspend` | **Dataplane untouched** — jobs blocked at the API layer, resources persist |
 | `suspended` → `active` | `POST /tenants/{id}/reactivate` | Unblocks; no re-provisioning needed |
+| `suspended` → `deleted` | `DELETE /tenants/{id}` (`?deleteData=true` to also purge S3) | **Hard deletion** — `deprovision()` tears down app/role in reverse order, KMS key scheduled with a 30-day recovery window; record kept as a tombstone (audit/lineage keep resolving); irreversible via API |
+
+Deletion is deliberately two-step (suspend first, no queued/running jobs)
+and idempotent like provisioning: teardown clears each resource id off the
+record as it completes, a partial failure records `provisioningError`, and
+re-running DELETE resumes. S3 artifacts are **kept by default** (MRM
+retention) — `?deleteData=true` is the explicit opt-in to purge the
+tenant's prefix. A deleted tenant cannot be reactivated or re-provisioned;
+create a new tenant instead.
 
 **Why `tenantId` is chosen, never generated** — the same slug appears in
 three independent places that must agree: the Entra group names
@@ -396,11 +405,12 @@ Defined in `backend/iac/main.tf`; the important grants:
   `tenant_execution_role_arn_pattern`, and only to EMR Serverless /
   SageMaker. Without this, real-mode job submission fails.
 - **sts:AssumeRole + TagSession** — the dataplane runtime role (split mode
-  only). Tenant provisioning ALSO goes through that role, so its policy
-  (owned by `tmt-dataplane`) needs `kms:CreateKey/CreateAlias`,
-  `iam:CreateRole/PutRolePolicy` (boundary-conditioned — see
-  `TENANT_ROLE_PERMISSIONS_BOUNDARY_ARN`), and
-  `emr-serverless:CreateApplication` beyond the job-path ABAC.
+  only). Tenant provisioning AND deprovisioning also go through that role,
+  so its policy (owned by `tmt-dataplane`) needs, beyond the job-path ABAC:
+  `kms:CreateKey/CreateAlias/DeleteAlias/ScheduleKeyDeletion`,
+  `iam:CreateRole/PutRolePolicy/DeleteRolePolicy/DeleteRole`
+  (boundary-conditioned — see `TENANT_ROLE_PERMISSIONS_BOUNDARY_ARN`), and
+  `emr-serverless:CreateApplication/StopApplication/DeleteApplication`.
 
 ### 4.3 Configuration injection
 

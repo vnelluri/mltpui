@@ -46,6 +46,10 @@ def highest_privilege_role(roles: List[str]) -> Optional[str]:
 class TenantStatus(str, Enum):
     ACTIVE = "active"
     SUSPENDED = "suspended"
+    # Tombstone: dataplane resources torn down (deprovision), record kept so
+    # audit events and model lineage keep resolving. Blocks job submission
+    # like suspended; cannot be reactivated.
+    DELETED = "deleted"
 
 
 class ProvisioningStatus(str, Enum):

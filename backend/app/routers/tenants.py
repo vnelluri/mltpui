@@ -131,6 +131,11 @@ def retry_provisioning(
     tenant = _tenant_repo.get(tenant_id)
     if tenant is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found.")
+    if tenant.status == TenantStatus.DELETED.value:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Tenant is deleted — create a new tenant instead.",
+        )
     if tenant.provisioningStatus == ProvisioningStatus.ACTIVE.value:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -259,6 +264,74 @@ def update_tenant(
     return updated
 
 
+@router.delete("/{tenant_id}", response_model=Tenant)
+def delete_tenant(
+    tenant_id: str,
+    request: Request,
+    deleteData: bool = False,
+    user: CurrentUser = Depends(require_role("PlatformAdmin")),
+) -> Tenant:
+    """Hard-delete a tenant: tear down its dataplane resources and tombstone
+    the record.
+
+    Deliberately a two-step operation — the tenant must be **suspended**
+    first, and must have no queued/running jobs. The record is kept with
+    ``status=deleted`` (never removed) so audit events and model lineage
+    keep resolving; the KMS key gets a 30-day recovery window; S3 artifacts
+    are kept unless ``deleteData=true`` (governance retention default).
+    Teardown is idempotent — if it fails partway, the remaining resources
+    stay on the record and re-running DELETE resumes.
+    """
+    tenant = _tenant_repo.get(tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found.")
+    if tenant.status == TenantStatus.DELETED.value:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Tenant is already deleted."
+        )
+    if tenant.status != TenantStatus.SUSPENDED.value:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                "Deletion is a two-step operation: suspend the tenant first "
+                "(POST /tenants/{id}/suspend), then delete."
+            ),
+        )
+    jobs, _ = _job_repo.list_by_tenant(tenant_id, limit=1000)
+    active_jobs = sum(1 for j in jobs if j.status in {"queued", "running"})
+    if active_jobs:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=(
+                f"Tenant has {active_jobs} queued/running job(s) — wait for "
+                "or cancel them before deleting."
+            ),
+        )
+    tenant = tenant_provisioning_service.deprovision(tenant, delete_data=deleteData)
+    if tenant.provisioningStatus == ProvisioningStatus.FAILED.value:
+        # Persist the partial teardown so a retry resumes from it.
+        _tenant_repo.update(tenant)
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=(
+                f"Deprovisioning failed: {tenant.provisioningError} "
+                "Partial teardown recorded — re-run DELETE to resume."
+            ),
+        )
+    tenant.status = TenantStatus.DELETED.value
+    updated = _tenant_repo.update(tenant)
+    audit_service.record(
+        user=user,
+        action="tenant.delete",
+        resource_type="Tenant",
+        resource_id=tenant_id,
+        tenant_id=tenant_id,
+        details={"deleteData": deleteData},
+        request=request,
+    )
+    return updated
+
+
 @router.post("/{tenant_id}/suspend", response_model=Tenant)
 def suspend_tenant(
     tenant_id: str,
@@ -285,6 +358,16 @@ def reactivate_tenant(
     request: Request,
     user: CurrentUser = Depends(require_role("PlatformAdmin")),
 ) -> Tenant:
+    existing = _tenant_repo.get(tenant_id)
+    if existing is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found.")
+    if existing.status == TenantStatus.DELETED.value:
+        # Its dataplane resources are gone — reactivating would produce an
+        # active tenant that cannot run anything. Create a new tenant instead.
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Tenant is deleted and cannot be reactivated — create a new tenant.",
+        )
     tenant = _tenant_repo.set_status(tenant_id, TenantStatus.ACTIVE.value)
     if tenant is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found.")

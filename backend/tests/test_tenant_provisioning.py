@@ -18,6 +18,7 @@ from app.db.models import ProvisioningStatus, Tenant
 class FakeKms:
     def __init__(self):
         self.created = []
+        self.deletions_scheduled = []
 
     def describe_key(self, KeyId):
         raise Exception("NotFoundException")
@@ -29,11 +30,20 @@ class FakeKms:
     def create_alias(self, **kwargs):
         return {}
 
+    def delete_alias(self, **kwargs):
+        return {}
+
+    def schedule_key_deletion(self, **kwargs):
+        self.deletions_scheduled.append(kwargs)
+        return {}
+
 
 class FakeIam:
     def __init__(self):
         self.created = []
         self.policies = []
+        self.deleted_roles = []
+        self.role_gone = False
 
     def create_role(self, **kwargs):
         self.created.append(kwargs)
@@ -46,17 +56,45 @@ class FakeIam:
         self.policies.append(kwargs)
         return {}
 
+    def delete_role_policy(self, **kwargs):
+        if self.role_gone:
+            raise Exception("NoSuchEntityException")
+        return {}
+
+    def delete_role(self, RoleName):
+        if self.role_gone:
+            raise Exception("NoSuchEntityException")
+        self.deleted_roles.append(RoleName)
+        return {}
+
 
 class FakeEmr:
     def __init__(self, fail=False):
         self.created = []
+        self.deleted = []
         self.fail = fail
+        self.state = "STARTED"
+        self.stop_calls = 0
 
     def create_application(self, **kwargs):
         if self.fail:
             raise Exception("AccessDeniedException: not allowed")
         self.created.append(kwargs)
         return {"applicationId": "app-123"}
+
+    def get_application(self, applicationId):
+        return {"application": {"state": self.state}}
+
+    def stop_application(self, applicationId):
+        self.stop_calls += 1
+        self.state = "STOPPED"  # stop instantly in tests
+        return {}
+
+    def delete_application(self, applicationId):
+        if self.fail:
+            raise Exception("AccessDeniedException: not allowed")
+        self.deleted.append(applicationId)
+        return {}
 
 
 @pytest.fixture
@@ -155,3 +193,78 @@ def test_mock_mode_unchanged(monkeypatch):
     tenant = svc.provision(Tenant(tenantId="t-a", name="A"), requested_by="admin")
     assert tenant.provisioningStatus == ProvisioningStatus.ACTIVE.value
     assert tenant.emrApplicationId == "mock-emr-app-t-a"
+
+
+# ── deprovision (hard deletion) ──────────────────────────────────────────────
+
+
+def _provisioned_tenant():
+    return Tenant(
+        tenantId="t-a",
+        name="A",
+        emrApplicationId="app-123",
+        executionRoleArn="arn:aws:iam::1:role/ml-platform-tenant-t-a-exec",
+        kmsKeyArn="arn:aws:kms:us-east-1:1:key/key-123",
+        provisioningStatus=ProvisioningStatus.ACTIVE.value,
+    )
+
+
+def test_deprovision_tears_down_everything(fakes, monkeypatch):
+    deleted_prefixes = []
+    monkeypatch.setattr(
+        tps.TenantProvisioningService,
+        "_delete_s3_prefix",
+        lambda self, t: deleted_prefixes.append(t),
+    )
+    tenant = _svc().deprovision(_provisioned_tenant())
+    assert tenant.emrApplicationId is None
+    assert tenant.executionRoleArn is None
+    assert tenant.kmsKeyArn is None
+    assert tenant.provisioningStatus == ProvisioningStatus.PENDING.value
+    # Running app was stopped before deletion.
+    emr = fakes["emr-serverless"]
+    assert emr.stop_calls == 1 and emr.deleted == ["app-123"]
+    assert fakes["iam"].deleted_roles == ["ml-platform-tenant-t-a-exec"]
+    # KMS key SCHEDULED for deletion with the recovery window, not destroyed.
+    (sched,) = fakes["kms"].deletions_scheduled
+    assert sched["PendingWindowInDays"] == 30
+    # Data kept by default.
+    assert deleted_prefixes == []
+
+
+def test_deprovision_deletes_data_only_on_opt_in(fakes, monkeypatch):
+    deleted_prefixes = []
+    monkeypatch.setattr(
+        tps.TenantProvisioningService,
+        "_delete_s3_prefix",
+        lambda self, t: deleted_prefixes.append(t),
+    )
+    _svc().deprovision(_provisioned_tenant(), delete_data=True)
+    assert deleted_prefixes == ["t-a"]
+
+
+def test_deprovision_tolerates_already_gone_role(fakes):
+    fakes["iam"].role_gone = True
+    tenant = _svc().deprovision(_provisioned_tenant())
+    assert tenant.provisioningStatus == ProvisioningStatus.PENDING.value
+    assert tenant.executionRoleArn is None
+
+
+def test_deprovision_partial_failure_resumable(fakes):
+    fakes["emr-serverless"].fail = True  # delete_application raises
+    tenant = _svc().deprovision(_provisioned_tenant())
+    assert tenant.provisioningStatus == ProvisioningStatus.FAILED.value
+    assert "AccessDenied" in (tenant.provisioningError or "")
+    # EMR id retained for the retry; later steps never ran.
+    assert tenant.emrApplicationId == "app-123"
+    assert tenant.executionRoleArn is not None
+    assert fakes["kms"].deletions_scheduled == []
+
+
+def test_deprovision_mock_mode_clears_fields():
+    svc = tps.TenantProvisioningService()
+    svc.mock = True
+    tenant = svc.deprovision(_provisioned_tenant())
+    assert tenant.emrApplicationId is None
+    assert tenant.kmsKeyArn is None
+    assert tenant.provisioningStatus == ProvisioningStatus.PENDING.value

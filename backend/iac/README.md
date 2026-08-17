@@ -35,12 +35,14 @@ Notes:
 - The task role includes `iam:PassRole` restricted to the per-tenant
   execution-role name pattern — without the PassRole grant, real-mode job
   submission fails.
-- Tenant provisioning is direct boto3 through the dataplane **runtime role**
-  (no EventBridge): that role — owned by `tmt-dataplane` — needs
-  `kms:CreateKey/CreateAlias/DescribeKey/TagResource`,
-  `iam:CreateRole/GetRole/PutRolePolicy/TagRole` (boundary-conditioned; see
+- Tenant provisioning/deprovisioning is direct boto3 through the dataplane
+  **runtime role** (no EventBridge): that role — owned by `tmt-dataplane` —
+  needs `kms:CreateKey/CreateAlias/DescribeKey/TagResource/DeleteAlias/
+  ScheduleKeyDeletion`, `iam:CreateRole/GetRole/PutRolePolicy/TagRole/
+  DeleteRolePolicy/DeleteRole` (boundary-conditioned; see
   `TENANT_ROLE_PERMISSIONS_BOUNDARY_ARN`), and
-  `emr-serverless:CreateApplication/TagResource`.
+  `emr-serverless:CreateApplication/StopApplication/DeleteApplication/
+  TagResource`.
 - Secrets/config are read from SSM Parameter Store / Secrets Manager under
   `ssm_parameter_prefix` (same paths as the README's AWS setup section).
 - Per-tenant compute (EMR Serverless applications, execution roles, KMS keys)

@@ -37,6 +37,7 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 
 from app.config import settings
 from app.db.client import make_boto3_client
@@ -54,6 +55,15 @@ def _tags(tenant_id: str) -> list:
         {"Key": "tenantId", "Value": tenant_id},
         {"Key": "platform", "Value": _PLATFORM_TAG},
     ]
+
+
+def _is_not_found(exc: Exception) -> bool:
+    """True when a boto3 error means 'already gone' (teardown idempotency)."""
+    marker = type(exc).__name__ + str(exc)
+    return any(
+        m in marker
+        for m in ("ResourceNotFound", "NotFoundException", "NoSuchEntity")
+    )
 
 
 class TenantProvisioningService:
@@ -262,6 +272,122 @@ class TenantProvisioningService:
             tags={t["Key"]: t["Value"] for t in _tags(tenant.tenantId)},
         )
         tenant.emrApplicationId = resp["applicationId"]
+
+    # ── Deprovisioning (hard tenant deletion) ────────────────────────────
+
+    def deprovision(self, tenant: Tenant, delete_data: bool = False) -> Tenant:
+        """Tear down the tenant's dataplane resources (idempotent, reverse
+        order of provision).
+
+        Fields are cleared from the tenant record as each teardown completes,
+        so a partial failure persists what is left and re-running DELETE
+        resumes from there. The KMS key is **scheduled** for deletion (30-day
+        recovery window), never destroyed immediately. S3 data is deleted
+        only when ``delete_data=True`` — the default keeps artifacts for
+        governance/MRM retention.
+        """
+        if self.mock:
+            tenant.emrApplicationId = None
+            tenant.executionRoleArn = None
+            tenant.kmsKeyArn = None
+            tenant.provisioningStatus = ProvisioningStatus.PENDING.value
+            tenant.provisioningError = None
+            return tenant
+        tenant.provisioningError = None
+        try:
+            self._teardown_emr_application(tenant)
+            self._teardown_execution_role(tenant)
+            self._teardown_kms_key(tenant)
+            if delete_data:
+                self._delete_s3_prefix(tenant.tenantId)
+            tenant.provisioningStatus = ProvisioningStatus.PENDING.value
+            logger.info(
+                "Deprovisioned tenant %s (delete_data=%s)",
+                tenant.tenantId,
+                delete_data,
+            )
+        except Exception as exc:
+            logger.exception("Deprovisioning failed for tenant %s", tenant.tenantId)
+            tenant.provisioningStatus = ProvisioningStatus.FAILED.value
+            tenant.provisioningError = str(exc)[:500]
+        return tenant
+
+    def _teardown_emr_application(self, tenant: Tenant) -> None:
+        if not tenant.emrApplicationId:
+            return
+        emr = dataplane_client("emr-serverless", tenant.tenantId)
+        app_id = tenant.emrApplicationId
+        try:
+            state = emr.get_application(applicationId=app_id)["application"]["state"]
+        except Exception as exc:
+            if _is_not_found(exc):
+                tenant.emrApplicationId = None
+                return
+            raise
+        # Deletion requires a stopped application; stopping is async.
+        if state not in ("STOPPED", "CREATED"):
+            emr.stop_application(applicationId=app_id)
+            deadline = time.time() + 90
+            while True:
+                state = emr.get_application(applicationId=app_id)["application"]["state"]
+                if state == "STOPPED":
+                    break
+                if time.time() > deadline:
+                    raise RuntimeError(
+                        f"EMR Serverless app {app_id} did not stop within 90s "
+                        "— re-run DELETE to resume."
+                    )
+                time.sleep(3)
+        emr.delete_application(applicationId=app_id)
+        tenant.emrApplicationId = None
+
+    def _teardown_execution_role(self, tenant: Tenant) -> None:
+        if not tenant.executionRoleArn:
+            return
+        iam = dataplane_client("iam", tenant.tenantId)
+        role_name = tenant.executionRoleArn.rsplit("/", 1)[-1]
+        try:
+            iam.delete_role_policy(RoleName=role_name, PolicyName="tenant-scope")
+        except Exception as exc:
+            if not _is_not_found(exc):
+                raise
+        try:
+            iam.delete_role(RoleName=role_name)
+        except Exception as exc:
+            if not _is_not_found(exc):
+                raise
+        tenant.executionRoleArn = None
+
+    def _teardown_kms_key(self, tenant: Tenant) -> None:
+        if not tenant.kmsKeyArn:
+            return
+        kms = dataplane_client("kms", tenant.tenantId, settings.KMS_ENDPOINT_URL)
+        alias = f"alias/ml-platform-snowflake-{tenant.tenantId}"
+        try:
+            kms.delete_alias(AliasName=alias)
+        except Exception:
+            pass  # best-effort — the schedule below is what matters
+        try:
+            kms.schedule_key_deletion(
+                KeyId=tenant.kmsKeyArn, PendingWindowInDays=30
+            )
+        except Exception as exc:
+            # Already pending deletion (KMSInvalidState) or gone → done.
+            if not _is_not_found(exc) and "KMSInvalidState" not in (
+                type(exc).__name__ + str(exc)
+            ):
+                raise
+        tenant.kmsKeyArn = None
+
+    def _delete_s3_prefix(self, tenant_id: str) -> None:
+        """Delete every object under the tenant's prefix (explicit opt-in)."""
+        bucket = settings.S3_ARTIFACTS_BUCKET
+        client = make_boto3_client("s3", settings.S3_ENDPOINT_URL)
+        paginator = client.get_paginator("list_objects_v2")
+        for page in paginator.paginate(Bucket=bucket, Prefix=f"{tenant_id}/"):
+            keys = [{"Key": o["Key"]} for o in page.get("Contents", [])]
+            if keys:
+                client.delete_objects(Bucket=bucket, Delete={"Objects": keys})
 
     # ── Mock mode ────────────────────────────────────────────────────────
 
