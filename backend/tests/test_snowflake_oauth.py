@@ -122,3 +122,63 @@ def test_mock_connect_shape():
     assert token.startswith("mock-sf-token-")
     assert username == "JANE.DOE"
     assert expires_at.endswith("Z")
+
+
+# ── ensure_valid_cache (refresh decision) ────────────────────────────────────
+
+
+def _cache(expires_in_s: int, refresh: str | None = None):
+    from datetime import datetime, timedelta, timezone
+
+    from app.db.models import SnowflakeTokenCache
+
+    return SnowflakeTokenCache(
+        userId="user-1",
+        snowflakeToken="kms:AAAA",
+        snowflakeRefreshToken=refresh,
+        expiresAt=(
+            datetime.now(timezone.utc) + timedelta(seconds=expires_in_s)
+        ).strftime("%Y-%m-%dT%H:%M:%S.%fZ"),
+        snowflakeUsername="USER",
+    )
+
+
+def _user():
+    from app.auth.models import CurrentUser
+
+    return CurrentUser(
+        userId="user-1", email="a@b.com", name="A", role="DataScientist",
+        tenantId="tenant-x",
+    )
+
+
+def test_ensure_valid_cache_returns_fresh_token(monkeypatch):
+    import app.routers.snowflake as router
+
+    monkeypatch.setattr(router._token_repo, "get", lambda uid: _cache(3600))
+    assert router.ensure_valid_cache(_user()).snowflakeUsername == "USER"
+
+
+def test_ensure_valid_cache_respects_min_validity(monkeypatch):
+    """A token inside the runway window without a refresh token → 400."""
+    from fastapi import HTTPException
+
+    import app.routers.snowflake as router
+
+    monkeypatch.setattr(router._token_repo, "get", lambda uid: _cache(300))
+    # Valid without runway…
+    assert router.ensure_valid_cache(_user()) is not None
+    # …but 5 minutes left < 10-minute runway, and nothing to refresh from.
+    with pytest.raises(HTTPException) as exc:
+        router.ensure_valid_cache(_user(), min_validity_seconds=600)
+    assert exc.value.status_code == 400
+
+
+def test_ensure_valid_cache_never_connected(monkeypatch):
+    from fastapi import HTTPException
+
+    import app.routers.snowflake as router
+
+    monkeypatch.setattr(router._token_repo, "get", lambda uid: None)
+    with pytest.raises(HTTPException):
+        router.ensure_valid_cache(_user())

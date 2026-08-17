@@ -5,13 +5,34 @@ import { SnowflakeConnectBanner } from '../../components/snowflake/SnowflakeConn
 import { SnowflakeTableBrowser, type SnowflakeSelection } from '../../components/snowflake/SnowflakeTableBrowser';
 import { SnowflakeQueryEditor } from '../../components/snowflake/SnowflakeQueryEditor';
 
+/** Read the OAuth-callback outcome params once and clean them off the URL
+ * (the backend redirects here with ?connected=1 or ?error=… after Entra). */
+function consumeCallbackOutcome(): 'connected' | 'failed' | null {
+  const params = new URLSearchParams(window.location.search);
+  const outcome = params.get('error') ? 'failed' : params.get('connected') ? 'connected' : null;
+  if (outcome) {
+    params.delete('error');
+    params.delete('connected');
+    const rest = params.toString();
+    window.history.replaceState(null, '', window.location.pathname + (rest ? `?${rest}` : ''));
+  }
+  return outcome;
+}
+
 export function SnowflakePage() {
   const snowflake = useSnowflake();
   const [selection, setSelection] = useState<SnowflakeSelection | null>(null);
+  const [callbackOutcome] = useState(consumeCallbackOutcome);
 
   return (
     <div>
       <PageHeader title="Snowflake" description="Browse tables and run ad-hoc read-only queries under your own identity." />
+
+      {callbackOutcome === 'failed' && (
+        <Card className="mb-4 border-red-300 p-4 text-sm text-red-600">
+          Connecting to Snowflake failed — the sign-in at Entra was cancelled or rejected. Try again.
+        </Card>
+      )}
 
       <SnowflakeConnectBanner snowflake={snowflake} className="mb-6" />
 

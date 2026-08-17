@@ -77,20 +77,6 @@ def _get_or_create_default_experiment(tenant_id: str, user: CurrentUser) -> Expe
         raise
 
 
-def _token_remaining_seconds(expires_at: str) -> int:
-    """Seconds until an ISO-8601 expiry; <= 0 when expired or unparseable."""
-    from datetime import datetime, timezone
-
-    cleaned = (expires_at or "").replace("Z", "+00:00")
-    try:
-        dt = datetime.fromisoformat(cleaned)
-    except ValueError:
-        return 0
-    if dt.tzinfo is None:
-        dt = dt.replace(tzinfo=timezone.utc)
-    return int((dt - datetime.now(timezone.utc)).total_seconds())
-
-
 def _mark_submit_failed(job: TrainingJob, secret_arn: Optional[str], reason: str) -> None:
     """Best-effort cleanup when compute dispatch fails after the platform
     record was written: delete the token secret, mark the job (and its linked
@@ -260,31 +246,16 @@ def submit_job(
     snowflake_token: Optional[str] = None
     snowflake_token_expires_at: Optional[str] = None
     if body.snowflakeDatabase:
-        from app.db.repositories.snowflake_token_repo import SnowflakeTokenRepository
+        from app.routers.snowflake import ensure_valid_cache
 
-        cache = SnowflakeTokenRepository().get(user.userId)
-        if cache is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Not connected to Snowflake. Connect first via POST /snowflake/connect.",
-            )
         # Token lifetime (~1h) is far shorter than a job's max runtime: the
         # job consumes the token for its INITIAL data read, so what matters
-        # is enough runway to get scheduled and start reading. Fail fast at
-        # submission on an expired/about-to-expire token instead of letting
-        # the job die confusingly mid-startup.
-        remaining = _token_remaining_seconds(cache.expiresAt)
+        # is enough runway to get scheduled and start reading. A token short
+        # of that runway is transparently re-minted from the user's stored
+        # Entra refresh token; 400 ("connect first") only when the user
+        # never connected or the refresh failed.
         min_runway = settings.SNOWFLAKE_TOKEN_MIN_REMAINING_MINUTES * 60
-        if remaining < min_runway:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail=(
-                    "Your Snowflake token "
-                    + ("has expired" if remaining <= 0 else f"expires in {remaining // 60} minute(s)")
-                    + f" — at least {settings.SNOWFLAKE_TOKEN_MIN_REMAINING_MINUTES} minutes are "
-                    "required at submission. Reconnect via POST /snowflake/connect and resubmit."
-                ),
-            )
+        cache = ensure_valid_cache(user, min_validity_seconds=min_runway)
         snowflake_token = KmsCipher(tenant_id=tenant_id).decrypt(cache.snowflakeToken)
         snowflake_token_expires_at = cache.expiresAt
 

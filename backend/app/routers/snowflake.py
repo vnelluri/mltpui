@@ -85,14 +85,31 @@ def connect_snowflake_mock(user: CurrentUser) -> SnowflakeTokenCache:
     return _store_tokens(user.userId, user.tenantId, username, raw_token, expires_at)
 
 
-def ensure_valid_cache(user: CurrentUser) -> SnowflakeTokenCache:
+def _remaining_seconds(expires_at: str) -> float:
+    cleaned = (expires_at or "").replace("Z", "+00:00")
+    try:
+        dt = datetime.fromisoformat(cleaned)
+    except ValueError:
+        return 0.0
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return (dt - datetime.now(timezone.utc)).total_seconds()
+
+
+def ensure_valid_cache(
+    user: CurrentUser, min_validity_seconds: int = 0
+) -> SnowflakeTokenCache:
     """Return a cache row with a valid access token, refreshing if possible.
+
+    ``min_validity_seconds`` lets callers demand runway beyond "not expired"
+    (job submission needs the token to survive scheduling + initial read) —
+    a token short of it is refreshed like an expired one.
 
     Raises 400 when the user has never connected (or the refresh failed) —
     the SPA then offers POST /snowflake/connect.
     """
     cache = _token_repo.get(user.userId)
-    if cache is not None and not _is_expired(cache.expiresAt):
+    if cache is not None and _remaining_seconds(cache.expiresAt) > min_validity_seconds:
         return cache
     if (
         cache is not None
@@ -219,7 +236,21 @@ def snowflake_oauth_callback(
     except Exception:
         logger.exception("Snowflake OAuth code redemption failed")
         return bounce(failed=True)
-    username = snowflake_service._derive_username(bundle.get("email") or claims["e"])
+    # Identity binding: the consenting Entra account must be the user the
+    # state was minted for — otherwise a crafted callback (victim's state +
+    # attacker's code) would plant the attacker's tokens in the victim's
+    # cache and their queries would run as the attacker. Best-effort
+    # (id_token email may be absent), but when present it must match.
+    granted_email = bundle.get("email")
+    if granted_email and granted_email.lower() != claims["e"].lower():
+        logger.warning(
+            "Snowflake OAuth callback identity mismatch: consent for %s, "
+            "state minted for %s",
+            granted_email,
+            claims["e"],
+        )
+        return bounce(failed=True)
+    username = snowflake_service._derive_username(granted_email or claims["e"])
     _store_tokens(
         claims["u"],
         claims.get("t"),

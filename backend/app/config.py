@@ -265,6 +265,9 @@ class Settings(BaseSettings):
             "SNOWFLAKE_OAUTH_CLIENT_SECRET",
             "SNOWFLAKE_OAUTH_SCOPE",
             "SNOWFLAKE_ACCOUNT",
+            # The OAuth redirect URI is derived from this — without it the
+            # authorize URL cannot be built.
+            "PLATFORM_API_BASE_URL",
         ):
             if not getattr(self, name):
                 problems.append(
