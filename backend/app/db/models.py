@@ -311,6 +311,12 @@ class NotebookSession(BaseModel):
     # URL is a credential; the stored record is metadata only (see
     # notebook_repo, which strips it on write).
     presignedUrl: Optional[str] = None
+    # Capability name of the per-session Snowflake-token secret (random,
+    # under the job-token prefix). Returned ONCE in the launch response and
+    # never persisted — possession of the name is the capability
+    # (docs/NOTEBOOK_SNOWFLAKE_OIDC.md). None when the user has no Snowflake
+    # connection or minting failed (launch still succeeds).
+    snowflakeSecretName: Optional[str] = None
     urlExpiresAt: str
     createdAt: str = Field(default_factory=utcnow_iso)
     status: str = "active"

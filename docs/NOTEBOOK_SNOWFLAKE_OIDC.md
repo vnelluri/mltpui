@@ -5,9 +5,13 @@ launched it** — their Snowflake roles, their query history — with no shared
 service account. Companion to [EMR_STUDIO_IAM_MODE.md](EMR_STUDIO_IAM_MODE.md)
 and [EMR_STUDIO_FEDERATION_REQUEST.md](EMR_STUDIO_FEDERATION_REQUEST.md).
 
-Status: **design** — not yet implemented. The one external dependency (an extra
-SAML claim) is already folded into the pending Entra federation request so it
-lands in the same admin pass.
+Status: **Tier 1 implemented** — the launch-time hook
+(`routers/notebooks.py: mint_snowflake_session_secret`), the capability
+secret (`job_service.store_snowflake_session_secret`), the exec-role
+read/delete grants (`tenant_provisioning_service`), and the one-time UI
+surfacing all exist in code. Tier 2 (per-user runtime roles) is roadmap;
+its external dependency (the `PrincipalTag:email` SAML claim) is already in
+the pending Entra federation request.
 
 ## The problem
 
@@ -47,9 +51,12 @@ User ── Entra login ──► Platform SPA (app client in Entra)
                           │     upn = the user
                           ▼
               Secrets Manager (dataplane account):
-                ml-platform/snowflake/session/<uuid4>   (TTL, KMS-encrypted;
-                          │        the random name is returned ONCE in the
-                          │        launch response — it IS the capability)
+                <job-token-prefix>snowflake-session/<uuid4>
+                          │  (random name returned ONCE in the launch
+                          │   response — it IS the capability. Lives under
+                          │   the job-token prefix so the runtime role's
+                          │   ABAC create grant and the exec role's read
+                          │   grant already cover it — no new IAM surface)
                           ▼
 Notebook kernel — runs on the attached EMR Serverless app under the
 TENANT EXECUTION ROLE (shared per tenant; NOT the user's federated
@@ -89,14 +96,19 @@ Consequences, stated precisely:
 Layered mitigations (details + step numbers in
 [IAM_MODE_RUNBOOK.md](IAM_MODE_RUNBOOK.md) Phase 8):
 
-**Tier 1 — capability secrets (the baseline; ship this from day one):**
+**Tier 1 — capability secrets (implemented):**
 - Secret names are random per session
-  (`ml-platform/snowflake/session/<uuid4>`), returned **once** in the launch
-  response — possession of the name is the capability, delivered over the
-  same trusted channel as the session itself.
-- Tenant exec-role policy: allow `secretsmanager:GetSecretValue` on the
-  prefix, **explicit deny `secretsmanager:ListSecrets`** (no enumeration).
-- Short TTL (~15–60 min) + the helper deletes the secret after reading.
+  (`<job-token-prefix>snowflake-session/<uuid4>`), returned **once** in the
+  launch response — possession of the name is the capability, delivered over
+  the same trusted channel as the session itself
+  (`routers/notebooks.py: mint_snowflake_session_secret`; UI shows it once).
+- Tenant exec-role policy (provisioned by `tenant_provisioning_service`):
+  `GetSecretValue` on the prefix + `DeleteSecret` on the session subprefix,
+  both ABAC-conditioned on the tenant tag — and **no
+  `secretsmanager:ListSecrets` anywhere** (implicit deny; names stay
+  unenumerable).
+- The token inside self-expires (~60 min) + the helper deletes the secret
+  after reading.
 
 **Tier 2 — per-user runtime roles (the enforcement upgrade; roadmap):**
 - Backend provisions `ml-platform-user-<email>-runtime` at first notebook
@@ -175,11 +187,12 @@ secret-transit foundation, see `run_token_service.py`.)
 3. The secret lives in the **dataplane** account; the backend writes it
    cross-account via the runtime role, exactly like per-job secrets today
    (prefix addition, not a new path).
-4. Backend: launch-time hook in `POST /notebooks/launch` (mint + write the
-   capability-named secret, return the name once), refresh action.
-5. Tenant exec-role policy: `GetSecretValue` (+ `DeleteSecret` for
-   delete-after-read) on the session-secret prefix, **deny
-   `secretsmanager:ListSecrets`**.
+4. ✅ Backend: launch-time hook in `POST /notebooks/launch`
+   (`mint_snowflake_session_secret` — mint + write the capability-named
+   secret, return the name once; launch never fails on Snowflake problems).
+5. ✅ Tenant exec-role policy (`tenant_provisioning_service`):
+   `GetSecretValue` on the job-token prefix + `DeleteSecret` on the
+   session subprefix (tenant-tag-conditioned); `ListSecrets` never granted.
 
 ## Seeding verdict (resolved)
 

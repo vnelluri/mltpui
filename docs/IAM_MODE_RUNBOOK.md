@@ -129,15 +129,17 @@ session only drives the Studio UI. The Snowflake token is user-bound
 impossible), but IAM alone cannot stop a same-tenant kernel reading a
 colleague's secret. Layered response:
 
-**Tier 1 — capability secrets (build into the notebook-secrets feature from
-day one; never ship guessable names):**
+**Tier 1 — capability secrets ✅ implemented:**
 
-23. Secret names random per session
-    (`ml-platform/snowflake/session/<uuid4>`), returned **once** in the
-    launch response — the name is the capability.
-24. Tenant exec-role policy: allow `secretsmanager:GetSecretValue` on the
-    prefix, **explicit deny `secretsmanager:ListSecrets`**.
-25. Short TTL (~15–60 min) + helper cell deletes the secret after reading.
+23. ✅ Secret names random per session
+    (`<job-token-prefix>snowflake-session/<uuid4>`), returned **once** in
+    the launch response and shown once in the UI — the name is the
+    capability (`routers/notebooks.py: mint_snowflake_session_secret`).
+24. ✅ Tenant exec-role policy (provisioned by the backend):
+    `GetSecretValue` on the prefix + `DeleteSecret` on the session
+    subprefix, tenant-tag-conditioned; `ListSecrets` never granted.
+25. ✅ Token self-expires (~60 min); helper cell deletes the secret after
+    reading.
 
 **Tier 2 — per-user runtime roles (follow-up; IAM mode is the clean case):**
 

@@ -273,6 +273,10 @@ export interface NotebookSession {
   usecaseId?: string | null;
   /** Present only in the launch response — never persisted or re-listed. */
   presignedUrl: string | null;
+  /** Capability name of this session's Snowflake-token secret — shown ONCE
+   * at launch (paste into the notebook helper); null when Snowflake isn't
+   * connected. */
+  snowflakeSecretName?: string | null;
   urlExpiresAt: string;
   createdAt: string;
   status: NotebookStatus;

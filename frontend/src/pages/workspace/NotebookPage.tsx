@@ -34,6 +34,9 @@ export function NotebookPage() {
   const [loading, setLoading] = useState(true);
   const [launching, setLaunching] = useState<SessionType | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // Capability name of the launched session's Snowflake secret — delivered
+  // once by the launch response, held only in this page's state.
+  const [snowflakeSecretName, setSnowflakeSecretName] = useState<string | null>(null);
 
   const load = async () => {
     try {
@@ -59,6 +62,8 @@ export function NotebookPage() {
     setLaunching(sessionType);
     try {
       const session = await notebooksApi.launch({ sessionType, tenantId });
+      // Shown ONCE — the backend never returns it again (capability secret).
+      setSnowflakeSecretName(session.snowflakeSecretName ?? null);
       if (session.presignedUrl) {
         window.open(session.presignedUrl, '_blank', 'noopener,noreferrer');
       }
@@ -78,6 +83,17 @@ export function NotebookPage() {
         <div className="mb-6 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-3 text-sm text-red-700">
           {error}
         </div>
+      )}
+
+      {snowflakeSecretName && (
+        <InlineAlert tone="info" className="mb-6">
+          <span className="block font-medium">Snowflake is ready for this session.</span>
+          Paste this secret name into the notebook helper — it is shown only once, expires in
+          minutes, and is deleted after first use:
+          <code className="mt-1 block select-all break-all rounded bg-bg-elevated px-2 py-1 font-mono text-xs">
+            {snowflakeSecretName}
+          </code>
+        </InlineAlert>
       )}
 
       {!canLaunch && (

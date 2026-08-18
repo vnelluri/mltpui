@@ -20,9 +20,10 @@ class NotebookRepository:
             **Keys.notebook_gsi(
                 session.userId, session.createdAt, session.sessionId
             ),
-            # A presigned URL is a credential — return it once in the launch
+            # A presigned URL is a credential (and the Snowflake secret name
+            # is a capability) — return them once in the launch
             # response but never persist it; the record is metadata only.
-            **session.model_dump(exclude={"presignedUrl"}),
+            **session.model_dump(exclude={"presignedUrl", "snowflakeSecretName"}),
         }
         self.table.put_item(Item=clean_item(item))
         return session

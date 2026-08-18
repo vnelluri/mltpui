@@ -27,6 +27,7 @@ locals {
       COGNITO_APP_CLIENT_ID     = "${local.ssm_arn}/cognito/app-client-id"
       CORS_ALLOWED_ORIGINS      = "${local.ssm_arn}/cors/allowed-origins"
       EMR_STUDIO_URL            = "${local.ssm_arn}/emr/studio-url"
+      S3_ARTIFACTS_KMS_KEY_ARN  = "${local.ssm_arn}/s3/artifacts-kms-key-arn"
       SAGEMAKER_DOMAIN_ID       = "${local.ssm_arn}/sagemaker/domain-id"
       SAGEMAKER_TRAINING_IMAGE  = "${local.ssm_arn}/sagemaker/training-image"
       SNOWFLAKE_ACCOUNT         = "${local.ssm_arn}/snowflake/account"

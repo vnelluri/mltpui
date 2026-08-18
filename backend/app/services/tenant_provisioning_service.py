@@ -214,37 +214,91 @@ class TenantProvisioningService:
                 raise
             role_arn = iam.get_role(RoleName=role_name)["Role"]["Arn"]
         bucket = settings.S3_ARTIFACTS_BUCKET
-        policy = {
-            "Version": "2012-10-17",
-            "Statement": [
-                {
-                    "Sid": "TenantPrefixRW",
-                    "Effect": "Allow",
-                    "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
-                    "Resource": f"arn:aws:s3:::{bucket}/{tenant.tenantId}/*",
+        secret_prefix = settings.SECRETS_MANAGER_JOB_TOKEN_PREFIX
+        statements = [
+            {
+                "Sid": "TenantPrefixRW",
+                "Effect": "Allow",
+                "Action": ["s3:GetObject", "s3:PutObject", "s3:DeleteObject"],
+                "Resource": f"arn:aws:s3:::{bucket}/{tenant.tenantId}/*",
+            },
+            {
+                "Sid": "TenantPrefixList",
+                "Effect": "Allow",
+                "Action": ["s3:ListBucket"],
+                "Resource": f"arn:aws:s3:::{bucket}",
+                "Condition": {
+                    "StringLike": {"s3:prefix": [f"{tenant.tenantId}/*"]}
                 },
-                {
-                    "Sid": "TenantPrefixList",
-                    "Effect": "Allow",
-                    "Action": ["s3:ListBucket"],
-                    "Resource": f"arn:aws:s3:::{bucket}",
-                    "Condition": {
-                        "StringLike": {"s3:prefix": [f"{tenant.tenantId}/*"]}
-                    },
+            },
+            {
+                "Sid": "TenantKmsUse",
+                "Effect": "Allow",
+                "Action": [
+                    "kms:Decrypt",
+                    "kms:Encrypt",
+                    "kms:GenerateDataKey",
+                    "kms:DescribeKey",
+                ],
+                "Resource": tenant.kmsKeyArn or "*",
+            },
+            # Jobs read their per-job secret; notebook kernels read (and
+            # delete after reading) their session's Snowflake capability
+            # secret. Both live under the job-token prefix, ABAC-scoped to
+            # this tenant's tag. Deliberately NO secretsmanager:ListSecrets —
+            # capability names must stay unenumerable
+            # (docs/NOTEBOOK_SNOWFLAKE_OIDC.md, Tier 1).
+            {
+                "Sid": "JobTokenSecretsRead",
+                "Effect": "Allow",
+                "Action": ["secretsmanager:GetSecretValue"],
+                "Resource": f"arn:aws:secretsmanager:*:*:secret:{secret_prefix}*",
+                "Condition": {
+                    "StringEquals": {"aws:ResourceTag/tenantId": tenant.tenantId}
                 },
+            },
+            {
+                "Sid": "SessionSecretDeleteAfterRead",
+                "Effect": "Allow",
+                "Action": ["secretsmanager:DeleteSecret"],
+                "Resource": (
+                    f"arn:aws:secretsmanager:*:*:secret:{secret_prefix}"
+                    "snowflake-session/*"
+                ),
+                "Condition": {
+                    "StringEquals": {"aws:ResourceTag/tenantId": tenant.tenantId}
+                },
+            },
+            {
+                "Sid": "JobLogs",
+                "Effect": "Allow",
+                "Action": [
+                    "logs:CreateLogGroup",
+                    "logs:CreateLogStream",
+                    "logs:PutLogEvents",
+                    "logs:DescribeLogGroups",
+                    "logs:DescribeLogStreams",
+                ],
+                "Resource": "arn:aws:logs:*:*:*",
+            },
+        ]
+        # Bucket objects are SSE-KMS with the artifacts CMK — without
+        # data-key ops on it, every S3 read/write above fails. Blank in
+        # local dev (unencrypted LocalStack bucket).
+        if settings.S3_ARTIFACTS_KMS_KEY_ARN:
+            statements.append(
                 {
-                    "Sid": "TenantKmsUse",
+                    "Sid": "ArtifactsBucketKms",
                     "Effect": "Allow",
                     "Action": [
                         "kms:Decrypt",
-                        "kms:Encrypt",
                         "kms:GenerateDataKey",
                         "kms:DescribeKey",
                     ],
-                    "Resource": tenant.kmsKeyArn or "*",
-                },
-            ],
-        }
+                    "Resource": settings.S3_ARTIFACTS_KMS_KEY_ARN,
+                }
+            )
+        policy = {"Version": "2012-10-17", "Statement": statements}
         iam.put_role_policy(
             RoleName=role_name,
             PolicyName="tenant-scope",

@@ -146,6 +146,38 @@ def test_resources_are_tagged_for_abac(fakes):
     assert {"TagKey": "tenantId", "TagValue": "t-a"} in key_call["Tags"]
 
 
+def test_exec_role_policy_grants_job_and_session_secrets(fakes):
+    """Jobs read their secret; notebook kernels read + delete their session
+    capability secret; logs are writable — and ListSecrets is NEVER granted
+    (capability names must stay unenumerable)."""
+    import json
+
+    _svc().provision(Tenant(tenantId="t-a", name="A"), requested_by="admin")
+    (policy_call,) = fakes["iam"].policies
+    doc = json.loads(policy_call["PolicyDocument"])
+    sids = {s["Sid"]: s for s in doc["Statement"]}
+    read = sids["JobTokenSecretsRead"]
+    assert read["Condition"]["StringEquals"]["aws:ResourceTag/tenantId"] == "t-a"
+    assert settings.SECRETS_MANAGER_JOB_TOKEN_PREFIX in read["Resource"]
+    delete = sids["SessionSecretDeleteAfterRead"]
+    assert "snowflake-session/" in delete["Resource"]
+    assert "JobLogs" in sids
+    assert "ListSecrets" not in json.dumps(doc)
+
+
+def test_exec_role_policy_artifacts_kms_only_when_configured(fakes, monkeypatch):
+    import json
+
+    monkeypatch.setattr(
+        settings, "S3_ARTIFACTS_KMS_KEY_ARN", "arn:aws:kms:us-east-1:1:key/cmk"
+    )
+    _svc().provision(Tenant(tenantId="t-a", name="A"), requested_by="admin")
+    (policy_call,) = fakes["iam"].policies
+    doc = json.loads(policy_call["PolicyDocument"])
+    sids = {s["Sid"]: s for s in doc["Statement"]}
+    assert sids["ArtifactsBucketKms"]["Resource"] == "arn:aws:kms:us-east-1:1:key/cmk"
+
+
 def test_partial_failure_keeps_created_ids_and_marks_failed(fakes):
     fakes["emr-serverless"].fail = True
     tenant = _svc().provision(Tenant(tenantId="t-a", name="A"), requested_by="admin")

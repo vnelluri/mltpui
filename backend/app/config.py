@@ -150,6 +150,11 @@ class Settings(BaseSettings):
     # tenant KMS key in its key policy (the backend reaches KMS with its own
     # credentials cross-account — see dataplane_service docstring).
     BACKEND_PRINCIPAL_ARN: Optional[str] = None
+    # CMK the artifacts bucket is SSE-encrypted with (account-baseline
+    # output). Granted to each provisioned tenant execution role — without
+    # it, jobs/notebooks cannot read or write the SSE-KMS bucket objects.
+    # Blank in local dev (LocalStack bucket is unencrypted).
+    S3_ARTIFACTS_KMS_KEY_ARN: Optional[str] = None
 
     # ── Snowflake OAuth ─────────────────────────────────────────────────────
     SNOWFLAKE_ACCOUNT: Optional[str] = None
