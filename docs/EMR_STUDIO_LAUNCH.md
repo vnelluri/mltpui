@@ -256,6 +256,10 @@ collapse into one account.
 
 ### SSO mode (alternative)
 
+> Full ordered checklist with owners — including the IdC admin hand-off,
+> Snowflake OBO track, and notebook-secret mitigations — in
+> [SSO_MODE_RUNBOOK.md](SSO_MODE_RUNBOOK.md).
+
 - **IAM Identity Center enabled** org-wide, Entra federated, `myapp-*` groups
   SCIM-synced (org/account-level config the module cannot create).
 - **`auth_mode = "SSO"` and `session_mappings` populated** — keys must match
