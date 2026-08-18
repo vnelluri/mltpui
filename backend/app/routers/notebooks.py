@@ -90,7 +90,12 @@ def launch_notebook(
     enforce_tenant_access(user, body.tenantId)
 
     url, expires_at = notebook_service.launch(
-        body.sessionType, body.tenantId, user.userId, user.role, usecase_id=body.usecaseId
+        body.sessionType,
+        body.tenantId,
+        user.userId,
+        user.role,
+        usecase_id=body.usecaseId,
+        user_email=user.email,
     )
     session = NotebookSession(
         sessionId=str(uuid.uuid4()),

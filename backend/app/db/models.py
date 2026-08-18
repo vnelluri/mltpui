@@ -127,6 +127,8 @@ class Tenant(BaseModel):
     # pipeline (or filled with mock values in local dev). Job submission
     # fails loudly when these are missing in real (non-mock) mode.
     emrApplicationId: Optional[str] = None
+    # Tenant-specific SageMaker Studio domain; wins over the platform-wide
+    # SAGEMAKER_DOMAIN_ID fallback at notebook launch.
     sagemakerDomainId: Optional[str] = None
     executionRoleArn: Optional[str] = None
     # Per-tenant Snowflake-token KMS key. Stored as an ARN because in the

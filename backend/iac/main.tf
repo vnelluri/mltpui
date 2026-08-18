@@ -192,6 +192,10 @@ data "aws_iam_policy_document" "task" {
     actions = [
       "sagemaker:CreateTrainingJob", "sagemaker:DescribeTrainingJob",
       "sagemaker:StopTrainingJob", "sagemaker:CreatePresignedDomainUrl",
+      # Studio user profiles are ensured lazily at first notebook launch
+      # (presigning requires the profile to exist).
+      "sagemaker:DescribeUserProfile", "sagemaker:CreateUserProfile",
+      "sagemaker:AddTags",
     ]
     resources = ["*"]
   }

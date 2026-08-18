@@ -116,6 +116,11 @@ class Settings(BaseSettings):
     # ── SageMaker ───────────────────────────────────────────────────────────
     # Execution roles are per-tenant (Tenant.executionRoleArn) — there is
     # deliberately no platform-wide execution-role setting.
+    # Platform-wide fallback SageMaker Studio domain; a tenant's own
+    # sagemakerDomainId (Tenant record) takes precedence at launch. User
+    # profiles are ensured lazily at first launch. For per-user CloudTrail
+    # attribution, create the domain with
+    # ExecutionRoleIdentityConfig=USER_PROFILE_NAME.
     SAGEMAKER_DOMAIN_ID: Optional[str] = None
     # Training container image used for SageMaker training jobs (platform-wide).
     SAGEMAKER_TRAINING_IMAGE: Optional[str] = None

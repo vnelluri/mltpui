@@ -172,7 +172,12 @@ them:
   IAM-federation for `auth_mode = IAM`, IAM Identity Center for `SSO`). The
   backend never calls the EMR Studio API. See `docs/EMR_STUDIO_IAM_MODE.md`.
 - **SageMaker Studio** — presigned domain URLs
-  (`sagemaker:CreatePresignedDomainUrl`).
+  (`sagemaker:CreatePresignedDomainUrl`) into the tenant's domain
+  (`Tenant.sagemakerDomainId`, falling back to the platform-wide
+  `SAGEMAKER_DOMAIN_ID`). The per-user Studio profile is ensured lazily at
+  first launch, pinned to the tenant execution role; enable
+  `ExecutionRoleIdentityConfig=USER_PROFILE_NAME` on the domain for
+  per-user CloudTrail attribution.
 
 **How the Studio connects to a tenant's EMR Serverless application**
 (all defined in `tmt-dataplane/modules/emr-studio/main.tf`):
