@@ -1,5 +1,11 @@
 # Request: Enable IAM Identity Center for EMR Studio notebook access
 
+> **Status: SSO-alternative packet — do not send while on IAM mode.** The
+> platform currently defaults to **IAM auth mode**, which needs none of
+> this (its hand-off is [EMR_STUDIO_FEDERATION_REQUEST.md](EMR_STUDIO_FEDERATION_REQUEST.md)).
+> Send this packet only if the switch to SSO mode is decided — full
+> sequence in [SSO_MODE_RUNBOOK.md](SSO_MODE_RUNBOOK.md).
+
 **To:** AWS Organizations management-account admins
 **From:** ML Platform team
 **Scope:** Org-level AWS configuration only — the pieces Terraform cannot create.

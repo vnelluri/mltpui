@@ -47,10 +47,15 @@ User ── Entra login ──► Platform SPA (app client in Entra)
                           │     upn = the user
                           ▼
               Secrets Manager (dataplane account):
-                ml-platform/snowflake/user/<email>   (TTL, KMS-encrypted)
-                          │
-Notebook (user's tier-role session, ABAC-scoped — see below)
-                          │ boto3 get_secret_value → token
+                ml-platform/snowflake/session/<uuid4>   (TTL, KMS-encrypted;
+                          │        the random name is returned ONCE in the
+                          │        launch response — it IS the capability)
+                          ▼
+Notebook kernel — runs on the attached EMR Serverless app under the
+TENANT EXECUTION ROLE (shared per tenant; NOT the user's federated
+session — see "Trust boundary" below)
+                          │ boto3 get_secret_value(<name from launch>)
+                          │ → token; delete secret after read
                           ▼
               snowflake.connector.connect(authenticator="oauth", token=…)
                           ▼
@@ -62,31 +67,55 @@ Notebook (user's tier-role session, ABAC-scoped — see below)
 Nothing changes on the Snowflake side: it validates the same Entra-issued
 OBO tokens it already trusts.
 
-## Per-user isolation = IAM ABAC, not convention
+## Trust boundary — what IAM can and cannot enforce here
 
-The Entra SAML app for EMR Studio sends one extra claim
-(already in the federation request):
+**Correction to an earlier version of this design:** notebook code does not
+run under the user's federated session. The Workspace UI does, but the
+**kernel executes on the attached EMR Serverless application under the
+tenant execution role** — a shared, per-tenant identity — in both Studio
+auth modes. A per-user `${aws:PrincipalTag/email}` resource condition on
+the *tier role* therefore never applies to kernel calls.
 
-```
-https://aws.amazon.com/SAML/Attributes/PrincipalTag:email = <user UPN/email>
-```
+Consequences, stated precisely:
 
-and the tier roles' trust policy allows `sts:TagSession`. Every federated
-notebook session then carries an `email` session tag that **the user cannot
-choose or change**, and the tier-role permissions policy scopes secret reads
-to it:
+- **Attribution is never wrong.** The token's `upn` is baked in at mint —
+  whoever presents it, Snowflake records the real owner and grants only
+  that user's access. Cross-tenant theft is impossible (per-tenant secret
+  prefix + per-tenant exec roles).
+- **Same-tenant token borrowing is the residual risk**: IAM alone cannot
+  stop user B's kernel reading user A's secret when both kernels share the
+  tenant exec role.
 
-```json
-{
-  "Effect": "Allow",
-  "Action": "secretsmanager:GetSecretValue",
-  "Resource": "arn:aws:secretsmanager:<region>:<dataplane-acct>:secret:ml-platform/snowflake/user/${aws:PrincipalTag/email}-*"
-}
-```
+Layered mitigations (details + step numbers in
+[IAM_MODE_RUNBOOK.md](IAM_MODE_RUNBOOK.md) Phase 8):
 
-(The trailing `-*` covers Secrets Manager's random ARN suffix.) User A's
-session physically cannot read user B's token — enforced by AWS, not by
-naming discipline.
+**Tier 1 — capability secrets (the baseline; ship this from day one):**
+- Secret names are random per session
+  (`ml-platform/snowflake/session/<uuid4>`), returned **once** in the launch
+  response — possession of the name is the capability, delivered over the
+  same trusted channel as the session itself.
+- Tenant exec-role policy: allow `secretsmanager:GetSecretValue` on the
+  prefix, **explicit deny `secretsmanager:ListSecrets`** (no enumeration).
+- Short TTL (~15–60 min) + the helper deletes the secret after reading.
+
+**Tier 2 — per-user runtime roles (the enforcement upgrade; roadmap):**
+- Backend provisions `ml-platform-user-<email>-runtime` at first notebook
+  launch (same direct-boto3 machinery as tenant provisioning), scoped to
+  that user's secrets + tenant data.
+- The tier role's `iam:PassRole` is conditioned per user via the
+  `PrincipalTag:email` session tag —
+  `…role/ml-platform-user-${aws:PrincipalTag/email}-runtime` — so the
+  Studio attach picker offers each user exactly one runtime role. The
+  kernel then IS the user: per-user secret isolation **and** per-user
+  CloudTrail from inside notebooks. (This is where the SAML
+  `PrincipalTag:email` claim earns its keep — on PassRole at attach time,
+  not on kernel secret reads.) Clean in IAM mode; under SSO mode the
+  per-user session tag is unverified.
+
+**Tier 3 — fallback:** device-code flow in the notebook — the user
+authenticates as themselves from the kernel; no stored secret exists at
+all. Interactive prompt per session; needs an Entra public-client app +
+kernel egress to `login.microsoftonline.com`.
 
 ## Token lifetime & refresh
 
@@ -105,11 +134,15 @@ token.
 ```python
 import boto3, json, snowflake.connector
 
-def snowflake_conn():
-    email = "<your email>"  # matches your login; readable only by your session
+def snowflake_conn(secret_name):
+    """secret_name: shown once in the platform UI when you launch —
+    random per session, expires in minutes, deleted after this read."""
     sm = boto3.client("secretsmanager")
-    tok = json.loads(sm.get_secret_value(
-        SecretId=f"ml-platform/snowflake/user/{email}")["SecretString"])
+    tok = json.loads(sm.get_secret_value(SecretId=secret_name)["SecretString"])
+    try:
+        sm.delete_secret(SecretId=secret_name, ForceDeleteWithoutRecovery=True)
+    except Exception:
+        pass  # best-effort; the TTL reaps it anyway
     return snowflake.connector.connect(
         account=tok["account"], authenticator="oauth", token=tok["access_token"])
 ```
@@ -121,9 +154,10 @@ secret-transit foundation, see `run_token_service.py`.)
 
 - **No shared credential anywhere** — every Snowflake session is the user's
   own OIDC identity; Snowflake RBAC and query history attribute to them.
-- **Three audit systems, one identity:** Snowflake query history (the user),
-  our audit log (`notebook.launch` + token mint/refresh events), CloudTrail
-  (`GetSecretValue` by the federated session with `SourceIdentity`).
+- **Three audit systems, one identity:** Snowflake query history (the user
+  — always, the token guarantees it), our audit log (`notebook.launch` +
+  token mint/refresh events), CloudTrail (`GetSecretValue` — by the tenant
+  exec role under Tier 1, by the per-user runtime role under Tier 2).
 - The secret value is the same class of material as the existing per-job
   Snowflake secret — TTL'd, KMS-encrypted, never logged.
 - The Snowflake **role** the notebook gets is a launch-time decision (the OBO
@@ -133,15 +167,19 @@ secret-transit foundation, see `run_token_service.py`.)
 ## Prerequisites
 
 1. `PrincipalTag:email` claim + `sts:TagSession` trust — in the pending Entra
-   federation request / emr-studio module (tier-role trust policy).
+   federation request / emr-studio module. (Needed for the Tier-2 per-user
+   PassRole condition, not for kernel secret reads.)
 2. Secrets Manager + KMS **VPC endpoints** in the dataplane subnets the EMR
    Serverless interactive sessions use (same class of wiring as the 18888
    Studio↔Engine rule).
 3. The secret lives in the **dataplane** account; the backend writes it
    cross-account via the runtime role, exactly like per-job secrets today
    (prefix addition, not a new path).
-4. Backend: launch-time hook in `POST /notebooks/launch` (OBO + secret write),
-   tier-role policy statement, refresh endpoint/action.
+4. Backend: launch-time hook in `POST /notebooks/launch` (mint + write the
+   capability-named secret, return the name once), refresh action.
+5. Tenant exec-role policy: `GetSecretValue` (+ `DeleteSecret` for
+   delete-after-read) on the session-secret prefix, **deny
+   `secretsmanager:ListSecrets`**.
 
 ## Seeding verdict (resolved)
 
@@ -161,7 +199,13 @@ token and mints access tokens from it at will. Consequence for this design:
 
 ## Open items / to verify
 
-- Secret TTL + cleanup cadence for stale user secrets (mirror the job-secret
-  TTL approach).
-- MRM sign-off on the attribution chain (extends the EMR Studio federation
-  sign-off already tracked in EMR_STUDIO_IAM_MODE.md).
+- Secret TTL + cleanup cadence for orphaned session secrets (mirror the
+  job-secret TTL approach; delete-after-read covers the common case).
+- **Tier-2 rollout**: per-user runtime role provisioning + the per-user
+  PassRole condition — validate the PassRole/attach-picker behavior in the
+  sandbox first ([EMR_STUDIO_AUTH0_SANDBOX.md](EMR_STUDIO_AUTH0_SANDBOX.md)
+  test #5), and verify per-user session tags before attempting it under
+  SSO mode.
+- MRM sign-off on the attribution chain — including the Tier-1 residual
+  (same-tenant token borrowing possible until Tier 2; attribution itself
+  is never wrong).
