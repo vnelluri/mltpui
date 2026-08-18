@@ -8,6 +8,7 @@ mode a fake secret ARN is returned without writing anything.
 from __future__ import annotations
 
 import json
+import re
 import threading
 import time
 import uuid
@@ -181,6 +182,20 @@ class JobService:
         return job
 
     @staticmethod
+    def _safe_job_name(name: str, max_len: int) -> str:
+        """Slugify a user-supplied job name for AWS name fields.
+
+        SageMaker's TrainingJobName pattern is
+        ``[a-zA-Z0-9](-*[a-zA-Z0-9])*`` and EMR Serverless job-run names are
+        similarly restrictive — a name like "My Job" fails real-mode submit
+        with ValidationException (invisible under mock mode, where the name
+        is never sent to AWS). The record keeps the display name; only the
+        AWS-facing field is slugged.
+        """
+        slug = re.sub(r"[^A-Za-z0-9-]+", "-", name).strip("-") or "job"
+        return slug[:max_len].rstrip("-")
+
+    @staticmethod
     def _require_provisioned(tenant: Tenant, *fields: str) -> None:
         missing = [f for f in fields if not getattr(tenant, f)]
         if missing:
@@ -219,7 +234,7 @@ class JobService:
         resp = client.start_job_run(
             applicationId=tenant.emrApplicationId,
             executionRoleArn=tenant.executionRoleArn,
-            name=job.name,
+            name=self._safe_job_name(job.name, 64),
             jobDriver={
                 "sparkSubmit": {
                     "entryPoint": job.entryPointScript,
@@ -252,7 +267,16 @@ class JobService:
                 "real SageMaker training job submission."
             )
         client = dataplane_client("sagemaker", job.tenantId)
-        training_job_name = f"{job.name[:40]}-{uuid.uuid4().hex[:8]}"
+        training_job_name = f"{self._safe_job_name(job.name, 40)}-{uuid.uuid4().hex[:8]}"
+        # S3OutputPath is REQUIRED and must be a valid s3:// URI — an empty
+        # string fails submit with ValidationException. Default to the
+        # tenant's prefix (the execution role already has RW there); written
+        # back onto the job so the record, env vars and artifactUri agree.
+        if not job.s3OutputPath:
+            job.s3OutputPath = (
+                f"s3://{settings.S3_ARTIFACTS_BUCKET}/{job.tenantId}"
+                f"/jobs/{job.jobId}/output/"
+            )
         env = self._job_env(job, secret_arn)
         client.create_training_job(
             TrainingJobName=training_job_name,
@@ -263,7 +287,7 @@ class JobService:
             RoleArn=tenant.executionRoleArn,
             HyperParameters={k: str(v) for k, v in job.hyperparameters.items()},
             Environment=env,
-            OutputDataConfig={"S3OutputPath": job.s3OutputPath or ""},
+            OutputDataConfig={"S3OutputPath": job.s3OutputPath},
             ResourceConfig={
                 "InstanceType": job.instanceType or "ml.m5.xlarge",
                 "InstanceCount": job.instanceCount,
@@ -420,6 +444,9 @@ class JobService:
             "SUBMITTED": JobStatus.QUEUED.value,
             "PENDING": JobStatus.QUEUED.value,
             "SCHEDULED": JobStatus.QUEUED.value,
+            # Newer EMR Serverless state (queued behind concurrency limits) —
+            # unmapped it would misreport as "running".
+            "QUEUED": JobStatus.QUEUED.value,
             "RUNNING": JobStatus.RUNNING.value,
             "SUCCESS": JobStatus.SUCCEEDED.value,
             "FAILED": JobStatus.FAILED.value,
