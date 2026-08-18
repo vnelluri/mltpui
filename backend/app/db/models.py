@@ -314,8 +314,10 @@ class NotebookSession(BaseModel):
     # notebook_repo, which strips it on write).
     presignedUrl: Optional[str] = None
     # Capability name of the per-session Snowflake-token secret (random,
-    # under the job-token prefix). Returned ONCE in the launch response and
-    # never persisted — possession of the name is the capability
+    # under the job-token prefix). Returned ONCE in the launch response;
+    # persisted so the background refresher can rewrite the secret while the
+    # session is active. The capability defends against same-tenant KERNELS
+    # (no ListSecrets, no DynamoDB access) — the control-plane DB is trusted
     # (docs/NOTEBOOK_SNOWFLAKE_OIDC.md). None when the user has no Snowflake
     # connection or minting failed (launch still succeeds).
     snowflakeSecretName: Optional[str] = None

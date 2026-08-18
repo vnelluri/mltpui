@@ -187,6 +187,12 @@ class Settings(BaseSettings):
     # submission: the job consumes it for the initial data read, so an
     # about-to-expire token fails fast here instead of mid-job.
     SNOWFLAKE_TOKEN_MIN_REMAINING_MINUTES: int = 10
+    # Background refresh of notebook-session Snowflake secrets: while a
+    # session is active (and younger than the max age), the refresher
+    # re-mints from the stored Entra refresh token and rewrites the session's
+    # capability secret on this interval — no live user needed. 0 disables.
+    SNOWFLAKE_SESSION_REFRESH_INTERVAL_SECONDS: int = 300
+    SNOWFLAKE_SESSION_REFRESH_MAX_AGE_HOURS: int = 12
     SNOWFLAKE_MOCK_MODE: bool = True
 
     # ── KMS (Snowflake token encryption) ────────────────────────────────────

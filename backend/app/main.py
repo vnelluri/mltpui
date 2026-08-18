@@ -62,6 +62,15 @@ app.add_middleware(
 app.add_middleware(RequestLoggingMiddleware)
 
 
+@app.on_event("startup")
+def _start_background_workers() -> None:
+    # Keeps active notebook sessions' Snowflake capability secrets fresh
+    # from the stored Entra refresh tokens (no-op in mock mode).
+    from app.services.session_refresh_service import start_session_refresher
+
+    start_session_refresher()
+
+
 @app.exception_handler(KmsEncryptionError)
 async def kms_encryption_error_handler(request: Request, exc: KmsEncryptionError):
     """Fail closed on token-encryption problems: the operation is refused

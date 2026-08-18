@@ -96,19 +96,21 @@ def _remaining_seconds(expires_at: str) -> float:
     return (dt - datetime.now(timezone.utc)).total_seconds()
 
 
-def ensure_valid_cache(
-    user: CurrentUser, min_validity_seconds: int = 0
+def ensure_valid_cache_by_ids(
+    user_id: str, tenant_id: Optional[str], min_validity_seconds: int = 0
 ) -> SnowflakeTokenCache:
-    """Return a cache row with a valid access token, refreshing if possible.
+    """Core of ensure_valid_cache, callable without a live request identity.
+
+    The background session refresher runs with no CurrentUser — the stored
+    refresh token IS the durable grant; ``user_id`` is only the lookup key.
 
     ``min_validity_seconds`` lets callers demand runway beyond "not expired"
     (job submission needs the token to survive scheduling + initial read) —
     a token short of it is refreshed like an expired one.
 
-    Raises 400 when the user has never connected (or the refresh failed) —
-    the SPA then offers POST /snowflake/connect.
+    Raises 400 when the user has never connected (or the refresh failed).
     """
-    cache = _token_repo.get(user.userId)
+    cache = _token_repo.get(user_id)
     if cache is not None and _remaining_seconds(cache.expiresAt) > min_validity_seconds:
         return cache
     if (
@@ -116,18 +118,18 @@ def ensure_valid_cache(
         and cache.snowflakeRefreshToken
         and not settings.SNOWFLAKE_MOCK_MODE
     ):
-        cipher = KmsCipher(tenant_id=user.tenantId)
+        cipher = KmsCipher(tenant_id=tenant_id)
         old_refresh = cipher.decrypt(cache.snowflakeRefreshToken)
         try:
             bundle = snowflake_service.refresh_access_token(old_refresh)
         except Exception:
             # Transient failure or revoked refresh token — keep the row (its
             # TTL reaps it) and fall through to "reconnect".
-            logger.warning("Snowflake token refresh failed for user %s", user.userId)
+            logger.warning("Snowflake token refresh failed for user %s", user_id)
         else:
             return _store_tokens(
-                user.userId,
-                user.tenantId,
+                user_id,
+                tenant_id,
                 cache.snowflakeUsername,
                 bundle["access_token"],
                 bundle["expires_at"],
@@ -137,6 +139,15 @@ def ensure_valid_cache(
     raise HTTPException(
         status_code=status.HTTP_400_BAD_REQUEST,
         detail="Not connected to Snowflake. Connect first via POST /snowflake/connect.",
+    )
+
+
+def ensure_valid_cache(
+    user: CurrentUser, min_validity_seconds: int = 0
+) -> SnowflakeTokenCache:
+    """Request-context wrapper over ensure_valid_cache_by_ids."""
+    return ensure_valid_cache_by_ids(
+        user.userId, user.tenantId, min_validity_seconds
     )
 
 

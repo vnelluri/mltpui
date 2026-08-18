@@ -115,15 +115,22 @@ class JobService:
             )
             return resp["ARN"]
 
-    def store_snowflake_session_secret(self, tenant_id: str, payload: dict) -> str:
+    def store_snowflake_session_secret(
+        self, tenant_id: str, payload: dict, name: Optional[str] = None
+    ) -> str:
         """Store a notebook session's Snowflake token as a capability secret.
 
-        The name is random (uuid4) under the job-token prefix and is returned
-        ONCE in the launch response — possession of the name is the
-        capability (docs/NOTEBOOK_SNOWFLAKE_OIDC.md, Tier 1). It lives under
-        the job-token prefix deliberately: the runtime role's ABAC create
-        grant and the tenant execution role's read grant already cover that
-        prefix — no new IAM surface.
+        Without ``name``: mint a new random (uuid4) name under the job-token
+        prefix — returned ONCE in the launch response; possession of the
+        name is the capability (docs/NOTEBOOK_SNOWFLAKE_OIDC.md, Tier 1). It
+        lives under the job-token prefix deliberately: the runtime role's
+        ABAC create grant and the tenant execution role's read grant already
+        cover that prefix — no new IAM surface.
+
+        With ``name``: upsert that existing capability — the background
+        refresher rewrites the SAME name so the value the user pasted into
+        their notebook keeps working (including re-creating it after the
+        helper's delete-after-read).
 
         Same transit path as job secrets: real Secrets Manager in every mode
         (LocalStack/moto locally).
@@ -131,16 +138,22 @@ class JobService:
         client = dataplane_client(
             "secretsmanager", tenant_id, settings.SECRETS_MANAGER_ENDPOINT_URL
         )
-        secret_name = (
+        secret_name = name or (
             f"{settings.SECRETS_MANAGER_JOB_TOKEN_PREFIX}"
             f"snowflake-session/{uuid.uuid4()}"
         )
-        client.create_secret(
-            Name=secret_name,
-            SecretString=json.dumps({**payload, "tenantId": tenant_id}),
-            Description="Short-lived Snowflake token for a notebook session",
-            Tags=[{"Key": "tenantId", "Value": tenant_id}],
-        )
+        secret_string = json.dumps({**payload, "tenantId": tenant_id})
+        try:
+            client.create_secret(
+                Name=secret_name,
+                SecretString=secret_string,
+                Description="Short-lived Snowflake token for a notebook session",
+                Tags=[{"Key": "tenantId", "Value": tenant_id}],
+            )
+        except client.exceptions.ResourceExistsException:
+            client.put_secret_value(
+                SecretId=secret_name, SecretString=secret_string
+            )
         return secret_name
 
     def delete_job_token(self, secret_arn: Optional[str], tenant_id: str) -> None:

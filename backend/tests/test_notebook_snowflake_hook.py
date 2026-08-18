@@ -101,12 +101,15 @@ def test_store_session_secret_shape(monkeypatch):
     assert '"tenantId": "tenant-a"' in created["SecretString"]
 
 
-def test_secret_name_never_persisted():
-    """The repo must strip the capability name exactly like presignedUrl."""
+def test_persistence_contract():
+    """presignedUrl is stripped (credential, returned once); the secret NAME
+    is persisted — the background refresher needs it, and same-tenant
+    kernels cannot read the control-plane table (see notebook_repo)."""
     session = NotebookSession(
         sessionId="s1", userId="u1", sessionType="emr_studio",
         presignedUrl="https://x", snowflakeSecretName="secret-name",
         urlExpiresAt="2099-01-01T00:00:00Z",
     )
-    dumped = session.model_dump(exclude={"presignedUrl", "snowflakeSecretName"})
-    assert "snowflakeSecretName" not in dumped and "presignedUrl" not in dumped
+    dumped = session.model_dump(exclude={"presignedUrl"})
+    assert "presignedUrl" not in dumped
+    assert dumped["snowflakeSecretName"] == "secret-name"

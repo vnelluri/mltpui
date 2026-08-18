@@ -129,14 +129,25 @@ authenticates as themselves from the kernel; no stored secret exists at
 all. Interactive prompt per session; needs an Entra public-client app +
 kernel egress to `login.microsoftonline.com`.
 
-## Token lifetime & refresh
+## Token lifetime & refresh — background refresh (implemented)
 
-Entra access tokens live ~60–90 minutes; notebook sessions run for hours.
-Because the backend holds a KMS-encrypted **refresh token** (from the
-`offline_access` consent), it can re-mint **without the user present** —
-so background refresh is available from day one: rewrite the secret on a
-schedule while a session is active, or lazily via a "Refresh Snowflake
-token" UI action (user re-runs the helper cell).
+Entra access tokens live ~60–90 minutes; notebook sessions run for hours —
+and after launch there is no live platform identity. Irrelevant by design:
+the stored refresh token is the durable grant, and a daemon thread
+(`session_refresh_service.py`, started at app startup; interval
+`SNOWFLAKE_SESSION_REFRESH_INTERVAL_SECONDS`, default 5 min) re-mints for
+every active session younger than
+`SNOWFLAKE_SESSION_REFRESH_MAX_AGE_HOURS` and **rewrites the capability
+secret under its existing name** — the value the user pasted keeps working,
+and a secret consumed by delete-after-read is re-created. Disconnected
+users are skipped (their secret ages out); mock mode never starts the
+thread.
+
+Persistence note: the secret *name* is stored on the session record so the
+refresher can find it. This does not weaken the capability — it defends
+against same-tenant **kernels**, which can neither `ListSecrets` nor read
+the control-plane DynamoDB table (already trusted with the KMS-encrypted
+refresh tokens themselves).
 
 The notebook only ever sees short-lived access tokens — never a refresh
 token.
