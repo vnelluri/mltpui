@@ -7,7 +7,8 @@ and the notebook-secret mitigations. Owners per step. Companion docs:
 org-admin hand-off packet), [EMR_STUDIO_IAM_MODE.md](EMR_STUDIO_IAM_MODE.md)
 (the current default this replaces), and
 [NOTEBOOK_SNOWFLAKE_OIDC.md](NOTEBOOK_SNOWFLAKE_OIDC.md) (the notebook
-Snowflake design the mitigations harden).
+Snowflake design the mitigations harden). IAM-mode equivalent:
+[IAM_MODE_RUNBOOK.md](IAM_MODE_RUNBOOK.md).
 
 > Steps marked ✅ are already done in code on the current branches. Steps
 > tagged **mode-independent** are needed even if you stay on IAM mode.

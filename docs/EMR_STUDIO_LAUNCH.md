@@ -236,6 +236,10 @@ collapse into one account.
 
 ### IAM mode (default)
 
+> Full ordered checklist with owners — sandbox rehearsal, admin hand-offs,
+> Snowflake OBO track, mitigations, steady-state ops — in
+> [IAM_MODE_RUNBOOK.md](IAM_MODE_RUNBOOK.md).
+
 - **SAML provider created** by an IAM admin in the dataplane account (Entra
   federation metadata) — referenced by ARN, never created by the stack.
 - **`tmt-dataplane/modules/emr-studio` applied** with `auth_mode = "IAM"` and
