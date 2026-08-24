@@ -88,8 +88,9 @@ export function NotebookPage() {
       {snowflakeSecretName && (
         <InlineAlert tone="info" className="mb-6">
           <span className="block font-medium">Snowflake is ready for this session.</span>
-          Paste this secret name into the notebook helper — it is shown only once, expires in
-          minutes, and is deleted after first use:
+          Paste this secret name into the notebook helper. It is shown only once here, but stays
+          valid while your session is active — the token behind it is kept fresh automatically,
+          so re-run the same helper cell any time your connection expires:
           <code className="mt-1 block select-all break-all rounded bg-bg-elevated px-2 py-1 font-mono text-xs">
             {snowflakeSecretName}
           </code>
