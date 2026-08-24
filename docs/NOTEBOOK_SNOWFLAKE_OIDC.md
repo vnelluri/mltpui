@@ -1,5 +1,8 @@
 # Notebook → Snowflake with the user's own identity (OIDC / OBO)
 
+> Narrative end-to-end trace (sequence diagram, the user's actual UX, the
+> three-artifact model): [OBO_FLOW_WALKTHROUGH.md](OBO_FLOW_WALKTHROUGH.md).
+
 How a notebook running in EMR Studio connects to Snowflake **as the user who
 launched it** — their Snowflake roles, their query history — with no shared
 service account. Companion to [EMR_STUDIO_IAM_MODE.md](EMR_STUDIO_IAM_MODE.md)
